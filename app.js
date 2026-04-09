@@ -2,21 +2,23 @@
 
 const ROW_LENGTHS = [8, 7, 8, 7, 8, 7, 8, 7];
 const PRIMARY_COLORS = new Set(['red', 'blue', 'yellow']);
+const MIXED_COLORS = new Set(['purple', 'green', 'orange']);
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 const HEX_RADIUS = 34;
-const INNER_RADIUS = 24;
+const INNER_RADIUS = 26;
 const HEX_WIDTH = Math.sqrt(3) * HEX_RADIUS;
 const ROW_SPACING = 1.5 * HEX_RADIUS;
 const BOARD_PADDING = HEX_RADIUS + 10;
+const CLICK_MOVE_TOLERANCE = 12;
 
 const COLOR_HEX = {
   red: '#d94037',
   blue: '#2763d8',
-  yellow: '#f0c419',
-  purple: '#7a3db8',
+  yellow: '#f7dc52',
+  purple: '#b58ae0',
   green: '#2fa36b',
-  orange: '#e18223',
+  orange: '#f29b5f',
   white: '#ffffff'
 };
 
@@ -26,7 +28,13 @@ const MIX_RESULTS = {
   'yellow:red': 'orange',
   'red:yellow': 'orange',
   'blue:yellow': 'green',
-  'yellow:blue': 'green'
+  'yellow:blue': 'green',
+  'blue:orange': 'white',
+  'orange:blue': 'white',
+  'red:green': 'white',
+  'green:red': 'white',
+  'yellow:purple': 'white',
+  'purple:yellow': 'white'
 };
 
 /** @typedef {{index:number,row:number,col:number,cx:number,cy:number}} TileMeta */
@@ -42,6 +50,7 @@ const MIX_RESULTS = {
  * @property {number|null} hoverTarget
  * @property {number} containmentRatio
  * @property {number} overlapRatio
+ * @property {boolean} insideContainer
  */
 
 /**
@@ -66,7 +75,12 @@ const outerLayer = createSvgEl('g', { id: 'outer-layer' });
 const innerLayer = createSvgEl('g', { id: 'inner-layer' });
 const previewLayer = createSvgEl('g', { id: 'preview-layer' });
 const dragLayer = createSvgEl('g', { id: 'drag-layer' });
-boardSvg.append(outerLayer, innerLayer, previewLayer, dragLayer);
+const defsLayer = createSvgEl('defs', {});
+const overlapClipPath = createSvgEl('clipPath', { id: 'overlap-clip-path' });
+const overlapClipPolygon = createSvgEl('polygon', { points: '' });
+overlapClipPath.appendChild(overlapClipPolygon);
+defsLayer.appendChild(overlapClipPath);
+boardSvg.append(defsLayer, outerLayer, innerLayer, dragLayer, previewLayer);
 
 /** @type {GameState} */
 const state = {
@@ -110,7 +124,8 @@ function createEmptyDragState() {
     pointerY: 0,
     hoverTarget: null,
     containmentRatio: 0,
-    overlapRatio: 0
+    overlapRatio: 0,
+    insideContainer: false
   };
 }
 
@@ -174,6 +189,22 @@ function isPrimary(color) {
 }
 
 /**
+ * @param {TileColor} color
+ * @returns {boolean}
+ */
+function isMixed(color) {
+  return MIXED_COLORS.has(color);
+}
+
+/**
+ * @param {TileColor} color
+ * @returns {boolean}
+ */
+function isMovable(color) {
+  return isPrimary(color) || isMixed(color);
+}
+
+/**
  * @param {TileColor} sourceColor
  * @param {TileColor} targetColor
  * @returns {TileColor|null}
@@ -194,8 +225,7 @@ function canDrop(sourceIndex, targetIndex, gameState) {
 
   const source = gameState.tiles[sourceIndex];
   const target = gameState.tiles[targetIndex];
-  if (!isPrimary(source) || !isPrimary(target)) return false;
-  if (source === target) return false;
+  if (!isMovable(source) || target === 'white') return false;
 
   const neighborSet = new Set(getNeighbors(sourceIndex));
   if (!neighborSet.has(targetIndex)) return false;
@@ -233,7 +263,7 @@ function onPointerDown(event) {
   if (sourceIndex === null) return;
 
   const color = state.tiles[sourceIndex];
-  if (!isPrimary(color)) return;
+  if (!isMovable(color)) return;
 
   const point = svgPointFromClient(event.clientX, event.clientY);
   state.dragState = {
@@ -271,12 +301,36 @@ function onPointerUp(event) {
   if (state.dragState.sourceIndex === null) return;
 
   const sourceIndex = state.dragState.sourceIndex;
+  const sourceColor = state.tiles[sourceIndex];
+  const travelDistance = distanceBetween(
+    state.dragState.startPointerX,
+    state.dragState.startPointerY,
+    state.dragState.pointerX,
+    state.dragState.pointerY
+  );
+  const isTap = travelDistance <= CLICK_MOVE_TOLERANCE;
+
+  if (isTap && isMixed(sourceColor)) {
+    const cleared = clearAdjacentMixedMatches(sourceIndex, sourceColor, state);
+    if (cleared) {
+      // Ensure the tapped source tile clears whenever the mixed-cluster clear triggers.
+      cleared[sourceIndex] = 'white';
+      state.tiles = cleared;
+    }
+
+    if (boardSvg.hasPointerCapture(event.pointerId)) {
+      boardSvg.releasePointerCapture(event.pointerId);
+    }
+    state.dragState = createEmptyDragState();
+    render();
+    return;
+  }
+
   const target = state.dragState.hoverTarget;
-  const containment = state.dragState.containmentRatio;
   const canCommit =
     typeof target === 'number' &&
     canDrop(sourceIndex, target, state) &&
-    containment >= 0.9;
+    state.dragState.insideContainer;
 
   if (canCommit) {
     const updated = applyMove(sourceIndex, target, state);
@@ -303,6 +357,7 @@ function updateHoverTarget() {
     state.dragState.hoverTarget = null;
     state.dragState.containmentRatio = 0;
     state.dragState.overlapRatio = 0;
+    state.dragState.insideContainer = false;
     return;
   }
 
@@ -312,34 +367,44 @@ function updateHoverTarget() {
     state.dragState.hoverTarget = null;
     state.dragState.containmentRatio = 0;
     state.dragState.overlapRatio = 0;
+    state.dragState.insideContainer = false;
     return;
   }
 
   let bestTarget = null;
   let bestContainment = 0;
   let bestOverlap = 0;
+  let bestInsideContainer = false;
 
   const neighbors = getNeighbors(sourceIndex);
   for (const idx of neighbors) {
     if (!canDrop(sourceIndex, idx, state)) continue;
 
     const targetPoly = getInnerPolygonAtIndex(idx);
+    const targetOuterPoly = getOuterPolygonAtIndex(idx);
     const clipped = clipPolygonConvex(draggedPoly, targetPoly);
     const overlapArea = Math.abs(polygonArea(clipped));
+    const insideContainer = polygonInsideConvex(draggedPoly, targetOuterPoly);
 
-    if (overlapArea <= 0) continue;
+    if (overlapArea <= 0 && !insideContainer) continue;
 
-    const containment = overlapArea / draggedArea;
-    if (containment > bestContainment) {
+    const containment = overlapArea > 0 ? overlapArea / draggedArea : 0;
+    const isBetterCandidate =
+      (insideContainer && !bestInsideContainer) ||
+      (insideContainer === bestInsideContainer && containment > bestContainment);
+
+    if (isBetterCandidate) {
       bestContainment = containment;
-      bestOverlap = overlapArea / Math.abs(polygonArea(targetPoly));
+      bestOverlap = overlapArea > 0 ? overlapArea / Math.abs(polygonArea(targetPoly)) : 0;
       bestTarget = idx;
+      bestInsideContainer = insideContainer;
     }
   }
 
   state.dragState.hoverTarget = bestTarget;
   state.dragState.containmentRatio = bestContainment;
   state.dragState.overlapRatio = bestOverlap;
+  state.dragState.insideContainer = bestInsideContainer;
 }
 
 function initializeBoardStatic() {
@@ -391,7 +456,7 @@ function renderInnerTiles() {
     const displayColor = sourceIndex === idx ? 'white' : color;
     inner.setAttribute('fill', COLOR_HEX[displayColor]);
 
-    group.classList.toggle('draggable', isPrimary(color));
+    group.classList.toggle('draggable', isMovable(color));
     group.classList.toggle('dragging-source', sourceIndex === idx);
     group.setAttribute(
       'aria-label',
@@ -402,6 +467,7 @@ function renderInnerTiles() {
 
 function renderPreview() {
   previewLayer.innerHTML = '';
+  overlapClipPolygon.setAttribute('points', '');
 
   const sourceIndex = state.dragState.sourceIndex;
   const targetIndex = state.dragState.hoverTarget;
@@ -416,13 +482,13 @@ function renderPreview() {
 
   const draggedPoly = getDraggedInnerPolygon();
   const targetPoly = getInnerPolygonAtIndex(targetIndex);
-  const overlapPoly = clipPolygonConvex(draggedPoly, targetPoly);
-  if (overlapPoly.length < 3) return;
+  overlapClipPolygon.setAttribute('points', pointsToAttr(targetPoly));
 
   const preview = createSvgEl('polygon', {
     class: 'overlap-preview',
-    points: pointsToAttr(overlapPoly),
-    fill: COLOR_HEX[mixed]
+    points: pointsToAttr(draggedPoly),
+    fill: COLOR_HEX[mixed],
+    'clip-path': 'url(#overlap-clip-path)'
   });
 
   previewLayer.appendChild(preview);
@@ -460,6 +526,54 @@ function getDraggedInnerPolygon() {
 function getInnerPolygonAtIndex(index) {
   const tile = tilesMeta[index];
   return hexPoints(tile.cx, tile.cy, INNER_RADIUS);
+}
+
+/**
+ * @param {number} index
+ * @returns {{x:number,y:number}[]}
+ */
+function getOuterPolygonAtIndex(index) {
+  const tile = tilesMeta[index];
+  return hexPoints(tile.cx, tile.cy, HEX_RADIUS);
+}
+
+/**
+ * If a mixed tile is tapped and has at least one adjacent tile of the same mixed color,
+ * search the connected same-color group (including the tapped tile) and clear it only
+ * when at least three tiles are in that group.
+ * @param {number} sourceIndex
+ * @param {TileColor} sourceColor
+ * @param {GameState} gameState
+ * @returns {TileColor[]|null}
+ */
+function clearAdjacentMixedMatches(sourceIndex, sourceColor, gameState) {
+  if (!isMixed(sourceColor)) return null;
+
+  const neighbors = getNeighbors(sourceIndex);
+  const seedMatches = neighbors.filter((idx) => gameState.tiles[idx] === sourceColor);
+  if (seedMatches.length < 1) return null;
+
+  const toClear = new Set([sourceIndex, ...seedMatches]);
+  const queue = [sourceIndex, ...seedMatches];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    const currentNeighbors = getNeighbors(current);
+    for (const next of currentNeighbors) {
+      if (gameState.tiles[next] !== sourceColor) continue;
+      if (toClear.has(next)) continue;
+      toClear.add(next);
+      queue.push(next);
+    }
+  }
+
+  if (toClear.size < 3) return null;
+
+  const nextTiles = [...gameState.tiles];
+  for (const idx of toClear) {
+    nextTiles[idx] = 'white';
+  }
+  return nextTiles;
 }
 
 /**
@@ -562,6 +676,39 @@ function clipPolygonConvex(subject, clipper) {
 }
 
 /**
+ * @param {{x:number,y:number}[]} subject
+ * @param {{x:number,y:number}[]} container
+ * @returns {boolean}
+ */
+function polygonInsideConvex(subject, container) {
+  if (subject.length < 3 || container.length < 3) return false;
+  return subject.every((point) => pointInsideConvex(point, container));
+}
+
+/**
+ * @param {{x:number,y:number}} point
+ * @param {{x:number,y:number}[]} polygon
+ * @returns {boolean}
+ */
+function pointInsideConvex(point, polygon) {
+  const windingArea = polygonArea(polygon);
+  const epsilon = 0.75;
+
+  for (let i = 0; i < polygon.length; i += 1) {
+    const a = polygon[i];
+    const b = polygon[(i + 1) % polygon.length];
+    const cross = (b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x);
+    if (windingArea >= 0) {
+      if (cross < -epsilon) return false;
+    } else if (cross > epsilon) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
  * @param {{x:number,y:number}} p
  * @param {{x:number,y:number}} a
  * @param {{x:number,y:number}} b
@@ -660,4 +807,17 @@ function createSvgEl(name, attrs = {}) {
  */
 function pointsToAttr(points) {
   return points.map((p) => `${p.x.toFixed(3)},${p.y.toFixed(3)}`).join(' ');
+}
+
+/**
+ * @param {number} x1
+ * @param {number} y1
+ * @param {number} x2
+ * @param {number} y2
+ * @returns {number}
+ */
+function distanceBetween(x1, y1, x2, y2) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  return Math.sqrt(dx * dx + dy * dy);
 }

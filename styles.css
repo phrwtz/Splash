@@ -7,10 +7,10 @@
 
   --red: #d94037;
   --blue: #2763d8;
-  --yellow: #f0c419;
-  --purple: #7a3db8;
+  --yellow: #f7dc52;
+  --purple: #b58ae0;
   --green: #2fa36b;
-  --orange: #e18223;
+  --orange: #f29b5f;
   --white: #ffffff;
 }
 
@@ -147,12 +147,12 @@ button:focus-visible {
 #drag-layer .drag-inner {
   stroke: #111;
   stroke-width: 1;
-  opacity: 0.9;
+  opacity: 0.82;
 }
 
 #preview-layer .overlap-preview {
   stroke: none;
-  opacity: 0.8;
+  opacity: 0.95;
 }
 
 @media (max-width: 720px) {
