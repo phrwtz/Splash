@@ -45,9 +45,15 @@ body {
   letter-spacing: 0.04em;
 }
 
-.subtitle {
-  margin: 0.2rem 0 0;
-  opacity: 0.85;
+.scoreline {
+  margin: 0.25rem 0 0;
+  font-size: 1.03rem;
+  font-weight: 700;
+}
+
+#score-value {
+  display: inline-block;
+  min-width: 1.8ch;
 }
 
 .controls {
@@ -156,8 +162,8 @@ button:focus-visible {
 }
 
 @media (max-width: 720px) {
-  .subtitle {
-    font-size: 0.95rem;
+  .scoreline {
+    font-size: 0.98rem;
   }
 
   button {
