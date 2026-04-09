@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Colors v1</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="topbar">
+        <h1>Colors</h1>
+        <p class="subtitle">Drag primary colors onto adjacent different primary colors to mix.</p>
+      </header>
+
+      <section class="controls" aria-label="Game controls">
+        <button id="reset-btn" type="button">Reset</button>
+        <button id="new-board-btn" type="button">New Board</button>
+      </section>
+
+      <section class="legend" aria-label="Color legend">
+        <span class="legend-item"><span class="swatch red"></span>Red</span>
+        <span class="legend-item"><span class="swatch blue"></span>Blue</span>
+        <span class="legend-item"><span class="swatch yellow"></span>Yellow</span>
+        <span class="legend-item"><span class="swatch purple"></span>Purple</span>
+        <span class="legend-item"><span class="swatch green"></span>Green</span>
+        <span class="legend-item"><span class="swatch orange"></span>Orange</span>
+        <span class="legend-item"><span class="swatch white"></span>White</span>
+      </section>
+
+      <section class="board-wrap" aria-label="Colors board">
+        <svg id="board" role="img" aria-label="Hex board"></svg>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
