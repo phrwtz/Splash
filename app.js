@@ -1,26 +1,34 @@
 /** @typedef {'red'|'blue'|'yellow'|'purple'|'green'|'orange'|'white'} TileColor */
+/** @typedef {'landing'|'instructions'|'game'} ScreenName */
+/** @typedef {'play'|'demo'} PlayMode */
+/** @typedef {'mix'|'white-pair'|'none'} DemoResolution */
 
 const ROW_LENGTHS = [8, 7, 8, 7, 8, 7, 8, 7];
 const PRIMARY_COLORS = new Set(['red', 'blue', 'yellow']);
-const MIXED_COLORS = new Set(['purple', 'green', 'orange']);
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 const HEX_RADIUS = 34;
-const INNER_RADIUS = 26;
+const INNER_RADIUS = 24;
 const HEX_WIDTH = Math.sqrt(3) * HEX_RADIUS;
 const ROW_SPACING = 1.5 * HEX_RADIUS;
 const BOARD_PADDING = HEX_RADIUS + 10;
-const TILE_SELECTION_OVERLAP_THRESHOLD = 0.6;
-const DROP_CONTAINMENT_THRESHOLD = TILE_SELECTION_OVERLAP_THRESHOLD;
+
+const DRAG_SELECTION_THRESHOLD = 0.6;
+const DROP_CONTAINMENT_THRESHOLD = 0.9;
 const DRAG_DISTANCE_THRESHOLD = 6;
+
+const DEMO_INTRO_MESSAGE = 'Click through these message for an intro into how Colors is played.';
+const DEMO_FINAL_PAUSE_MS = 3000;
+const DEMO_HOP_MS = 430;
+const DEMO_RETURN_MS = 340;
 
 const COLOR_HEX = {
   red: '#d94037',
   blue: '#2763d8',
-  yellow: '#f7dc52',
-  purple: '#b58ae0',
+  yellow: '#f0c419',
+  purple: '#7a3db8',
   green: '#2fa36b',
-  orange: '#f29b5f',
+  orange: '#e18223',
   white: '#ffffff'
 };
 
@@ -30,13 +38,7 @@ const MIX_RESULTS = {
   'yellow:red': 'orange',
   'red:yellow': 'orange',
   'blue:yellow': 'green',
-  'yellow:blue': 'green',
-  'blue:orange': 'white',
-  'orange:blue': 'white',
-  'red:green': 'white',
-  'green:red': 'white',
-  'yellow:purple': 'white',
-  'purple:yellow': 'white'
+  'yellow:blue': 'green'
 };
 
 /** @typedef {{index:number,row:number,col:number,cx:number,cy:number}} TileMeta */
@@ -52,9 +54,6 @@ const MIX_RESULTS = {
  * @property {number|null} hoverTarget
  * @property {number} containmentRatio
  * @property {number} overlapRatio
- * @property {boolean} insideContainer
- * @property {number[]} passedTiles
- * @property {TileColor|null} pathColor
  * @property {Set<TileColor>} touchedTargetColors
  * @property {boolean} touchedIllegalColor
  * @property {boolean} touchedWhite
@@ -62,69 +61,189 @@ const MIX_RESULTS = {
  */
 
 /**
- * @typedef {Object} GameSnapshot
- * @property {TileColor[]} tiles
- * @property {number} score
- */
-
-/**
  * @typedef {Object} GameState
  * @property {TileColor[]} tiles
  * @property {TileColor[]} initialTiles
  * @property {DragState} dragState
- * @property {number} score
- * @property {GameSnapshot[]} history
+ */
+
+/**
+ * @typedef {Object} DemoStep
+ * @property {string} message
+ * @property {number} sourceIndex
+ * @property {number} targetIndex
+ * @property {number[]} pathIndices
+ * @property {DemoResolution} resolution
+ * @property {boolean} illegalReturn
  */
 
 const boardSvg = document.getElementById('board');
-const controlsEl = document.querySelector('.controls');
-const instructionsBtn = document.getElementById('instructions-btn');
-const instructionsModal = document.getElementById('instructions-modal');
-const instructionsCloseBtn = document.getElementById('instructions-close-btn');
-let undoBtn = document.getElementById('undo-btn');
+const landingBoardSvg = document.getElementById('landing-board');
+const playInstructionsBtn = document.getElementById('play-instructions-btn');
 const resetBtn = document.getElementById('reset-btn');
 const newBoardBtn = document.getElementById('new-board-btn');
-const scoreValueEl = document.getElementById('score-value');
+
 const moveErrorModal = document.getElementById('move-error-modal');
 const moveErrorText = document.getElementById('move-error-text');
+const moveErrorOkBtn = document.getElementById('move-error-ok-btn');
+const scoreValueEl = document.getElementById('score-value');
 
-if (!undoBtn && controlsEl) {
-  undoBtn = document.createElement('button');
-  undoBtn.id = 'undo-btn';
-  undoBtn.type = 'button';
-  undoBtn.textContent = 'Undo';
-  if (resetBtn) {
-    controlsEl.insertBefore(undoBtn, resetBtn);
-  } else {
-    controlsEl.prepend(undoBtn);
-  }
-}
+const landingScreen = document.getElementById('landing-screen');
+const instructionsScreen = document.getElementById('instructions-screen');
+const gameScreen = document.getElementById('game-screen');
+
+const landingStartGameBtn = document.getElementById('landing-start-game-btn');
+const landingHowToBtn = document.getElementById('landing-how-to-btn');
+const landingDemoBtn = document.getElementById('landing-demo-btn');
+
+const instructionsStartGameBtn = document.getElementById('instructions-start-game-btn');
+const instructionsDemoBtn = document.getElementById('instructions-demo-btn');
+const instructionsBackBtn = document.getElementById('instructions-back-btn');
+
+const demoStartGameBtn = document.getElementById('demo-start-game-btn');
 
 const tilesMeta = buildTileMeta();
 const indexByRowCol = new Map(tilesMeta.map((tile) => [keyOf(tile.row, tile.col), tile.index]));
 
 const boardPixelWidth = BOARD_PADDING * 2 + HEX_WIDTH * 8.5;
 const boardPixelHeight = BOARD_PADDING * 2 + HEX_RADIUS * 2 + ROW_SPACING * (ROW_LENGTHS.length - 1);
-boardSvg.setAttribute('viewBox', `0 0 ${boardPixelWidth} ${boardPixelHeight}`);
+boardSvg?.setAttribute('viewBox', `0 0 ${boardPixelWidth} ${boardPixelHeight}`);
+landingBoardSvg?.setAttribute('viewBox', `0 0 ${boardPixelWidth} ${boardPixelHeight}`);
 
 const outerLayer = createSvgEl('g', { id: 'outer-layer' });
 const innerLayer = createSvgEl('g', { id: 'inner-layer' });
 const previewLayer = createSvgEl('g', { id: 'preview-layer' });
 const dragLayer = createSvgEl('g', { id: 'drag-layer' });
-boardSvg.append(outerLayer, innerLayer, dragLayer, previewLayer);
+const demoLayer = createSvgEl('g', { id: 'demo-layer' });
+const landingOuterLayer = createSvgEl('g', { id: 'landing-outer-layer' });
+const landingInnerLayer = createSvgEl('g', { id: 'landing-inner-layer' });
+boardSvg?.append(outerLayer, innerLayer, previewLayer, dragLayer, demoLayer);
+landingBoardSvg?.append(landingOuterLayer, landingInnerLayer);
 
 /** @type {GameState} */
 const state = {
   tiles: createShuffledBoard(),
   initialTiles: [],
-  dragState: createEmptyDragState(),
-  score: 0,
-  history: []
+  dragState: createEmptyDragState()
 };
 state.initialTiles = [...state.tiles];
+let landingTiles = createShuffledBoard();
+
+const appState = {
+  /** @type {ScreenName} */
+  screen: 'landing',
+  /** @type {PlayMode} */
+  mode: 'play'
+};
+/** @type {'landing'|'game'} */
+let instructionsReturnScreen = 'landing';
+
+const demoState = {
+  active: false,
+  running: false,
+  stepIndex: 0,
+  version: 0,
+  finalTimer: /** @type {number|null} */ (null)
+};
+
+const demoAnimation = {
+  active: false,
+  sourceIndex: /** @type {number|null} */ (null),
+  color: /** @type {TileColor|null} */ (null),
+  x: 0,
+  y: 0
+};
+
+/** @type {DemoStep[]} */
+const DEMO_STEPS = [
+  {
+    message:
+      'A blue tile is moved onto a neighboring red tile to produce a purple tile. One white tile is created and adds to the score.',
+    sourceIndex: 1,
+    targetIndex: 2,
+    pathIndices: [],
+    resolution: 'mix',
+    illegalReturn: false
+  },
+  {
+    message:
+      'A yellow tile is moved onto a neighboring blue tile to produce a green tile. One white tile is created and adds to the score.',
+    sourceIndex: 4,
+    targetIndex: 5,
+    pathIndices: [],
+    resolution: 'mix',
+    illegalReturn: false
+  },
+  {
+    message:
+      'A red tile is moved onto a neighboring yellow tile to produce an orange tile. One white tile is created and adds to the score.',
+    sourceIndex: 9,
+    targetIndex: 10,
+    pathIndices: [],
+    resolution: 'mix',
+    illegalReturn: false
+  },
+  {
+    message:
+      'A blue tile moves onto an orange tile and produces a white tile. Two white tiles are created and scored.',
+    sourceIndex: 11,
+    targetIndex: 10,
+    pathIndices: [],
+    resolution: 'white-pair',
+    illegalReturn: false
+  },
+  {
+    message:
+      'A green tile moves onto a yellow tile and produces a white tile. Two white tiles are created and scored.',
+    sourceIndex: 5,
+    targetIndex: 6,
+    pathIndices: [],
+    resolution: 'white-pair',
+    illegalReturn: false
+  },
+  {
+    message:
+      'A blue tile travels along a set of blue tiles and then lands on a yellow tile to produce a green tile.',
+    sourceIndex: 18,
+    targetIndex: 23,
+    pathIndices: [17, 16, 15],
+    resolution: 'mix',
+    illegalReturn: false
+  },
+  {
+    message:
+      'A blue tile tries to land on a purple tile but that tile already contains blue so the move is illegal and the tile returns home.',
+    sourceIndex: 3,
+    targetIndex: 2,
+    pathIndices: [],
+    resolution: 'none',
+    illegalReturn: true
+  },
+  {
+    message:
+      "A blue tile travels along two blue tiles, then along two yellow tiles before trying to land on a red tile. Once a tile has chosen a color to travel or land on it can't change its mind so this move is illegal and the tile returns home.",
+    sourceIndex: 46,
+    targetIndex: 51,
+    pathIndices: [47, 48, 49, 50],
+    resolution: 'none',
+    illegalReturn: true
+  },
+  {
+    message:
+      'A red tile tried to move onto a white tile. No tile is allowed to move onto a white tile so the move is illegal.',
+    sourceIndex: 12,
+    targetIndex: 11,
+    pathIndices: [],
+    resolution: 'none',
+    illegalReturn: true
+  }
+];
 
 initializeBoardStatic();
+initializeLandingBoardStatic();
+renderLandingBoard();
 render();
+setScreen('landing');
 
 boardSvg.addEventListener('pointerdown', onPointerDown);
 boardSvg.addEventListener('pointermove', onPointerMove);
@@ -132,72 +251,34 @@ boardSvg.addEventListener('pointerup', onPointerUp);
 boardSvg.addEventListener('pointercancel', cancelDrag);
 boardSvg.addEventListener('lostpointercapture', cancelDrag);
 
-if (instructionsBtn && instructionsModal) {
-  instructionsBtn.addEventListener('click', () => {
-    if (typeof instructionsModal.showModal === 'function') {
-      instructionsModal.showModal();
-    } else {
-      instructionsModal.setAttribute('open', '');
-    }
-  });
-}
+moveErrorOkBtn?.addEventListener('click', onMoveErrorButtonClick);
 
-if (instructionsCloseBtn && instructionsModal) {
-  instructionsCloseBtn.addEventListener('click', () => {
-    if (typeof instructionsModal.close === 'function') {
-      instructionsModal.close();
-    } else {
-      instructionsModal.removeAttribute('open');
-    }
-  });
-}
-
-if (instructionsModal) {
-  instructionsModal.addEventListener('click', (event) => {
-    const rect = instructionsModal.getBoundingClientRect();
-    const clickedOutside =
-      event.clientX < rect.left ||
-      event.clientX > rect.right ||
-      event.clientY < rect.top ||
-      event.clientY > rect.bottom;
-    if (!clickedOutside) return;
-
-    if (typeof instructionsModal.close === 'function') {
-      instructionsModal.close();
-    } else {
-      instructionsModal.removeAttribute('open');
-    }
-  });
-}
-
-if (undoBtn) {
-  undoBtn.addEventListener('click', () => {
-    if (state.history.length === 0) return;
-    const previous = state.history.pop();
-    state.tiles = [...previous.tiles];
-    state.score = previous.score;
-    state.dragState = createEmptyDragState();
-    render();
-  });
-}
-
-resetBtn.addEventListener('click', () => {
+resetBtn?.addEventListener('click', () => {
+  if (appState.mode !== 'play') return;
   state.tiles = [...state.initialTiles];
   state.dragState = createEmptyDragState();
-  state.score = 0;
-  state.history = [];
+  hideMoveError(true);
   render();
 });
 
-newBoardBtn.addEventListener('click', () => {
+newBoardBtn?.addEventListener('click', () => {
+  if (appState.mode !== 'play') return;
   const fresh = createShuffledBoard();
   state.tiles = [...fresh];
   state.initialTiles = [...fresh];
   state.dragState = createEmptyDragState();
-  state.score = 0;
-  state.history = [];
+  hideMoveError(true);
   render();
 });
+
+landingStartGameBtn?.addEventListener('click', () => enterGamePlay({ freshBoard: true }));
+landingHowToBtn?.addEventListener('click', enterInstructionsScreen);
+landingDemoBtn?.addEventListener('click', enterDemoMode);
+instructionsStartGameBtn?.addEventListener('click', () => enterGamePlay({ freshBoard: true }));
+instructionsDemoBtn?.addEventListener('click', enterDemoMode);
+instructionsBackBtn?.addEventListener('click', onInstructionsBack);
+demoStartGameBtn?.addEventListener('click', () => enterGamePlay({ freshBoard: true }));
+playInstructionsBtn?.addEventListener('click', enterInstructionsScreen);
 
 /** @returns {DragState} */
 function createEmptyDragState() {
@@ -211,14 +292,354 @@ function createEmptyDragState() {
     hoverTarget: null,
     containmentRatio: 0,
     overlapRatio: 0,
-    insideContainer: false,
-    passedTiles: [],
-    pathColor: null,
     touchedTargetColors: new Set(),
     touchedIllegalColor: false,
     touchedWhite: false,
     touchedMultipleTargetColors: false
   };
+}
+
+function enterLandingScreen() {
+  stopDemoMode();
+  appState.mode = 'play';
+  landingTiles = createShuffledBoard();
+  renderLandingBoard();
+  hideMoveError(true);
+  setScreen('landing');
+}
+
+function enterInstructionsScreen() {
+  instructionsReturnScreen = appState.screen === 'game' ? 'game' : 'landing';
+  stopDemoMode();
+  appState.mode = 'play';
+  hideMoveError(true);
+  setScreen('instructions');
+}
+
+function onInstructionsBack() {
+  if (instructionsReturnScreen === 'game') {
+    hideMoveError(true);
+    setScreen('game');
+    instructionsReturnScreen = 'landing';
+    return;
+  }
+  enterLandingScreen();
+}
+
+/**
+ * @param {{freshBoard?:boolean}} options
+ */
+function enterGamePlay(options = {}) {
+  const { freshBoard = true } = options;
+  stopDemoMode();
+
+  appState.mode = 'play';
+  setScreen('game');
+  gameScreen?.classList.remove('demo-mode');
+
+  if (demoStartGameBtn) {
+    demoStartGameBtn.classList.add('hidden');
+  }
+
+  if (moveErrorOkBtn) {
+    moveErrorOkBtn.textContent = 'OK';
+    moveErrorOkBtn.disabled = false;
+  }
+  hideMoveError(true);
+
+  if (freshBoard) {
+    const fresh = createShuffledBoard();
+    state.tiles = [...fresh];
+    state.initialTiles = [...fresh];
+  }
+
+  state.dragState = createEmptyDragState();
+  clearDemoAnimation();
+  render();
+}
+
+function enterDemoMode() {
+  stopDemoMode();
+
+  appState.mode = 'demo';
+  setScreen('game');
+  gameScreen?.classList.add('demo-mode');
+
+  if (demoStartGameBtn) {
+    demoStartGameBtn.classList.remove('hidden');
+  }
+
+  state.tiles = createDemoBoard();
+  state.initialTiles = [...state.tiles];
+  state.dragState = createEmptyDragState();
+
+  demoState.active = true;
+  demoState.running = false;
+  demoState.stepIndex = 0;
+
+  showMoveMessage(DEMO_INTRO_MESSAGE, 'Next', false);
+  render();
+}
+
+function stopDemoMode() {
+  if (demoState.finalTimer !== null) {
+    window.clearTimeout(demoState.finalTimer);
+    demoState.finalTimer = null;
+  }
+
+  demoState.active = false;
+  demoState.running = false;
+  demoState.stepIndex = 0;
+  demoState.version += 1;
+
+  clearDemoAnimation();
+  if (demoStartGameBtn) {
+    demoStartGameBtn.classList.add('hidden');
+  }
+}
+
+/**
+ * @param {ScreenName} screen
+ */
+function setScreen(screen) {
+  appState.screen = screen;
+
+  landingScreen?.classList.toggle('hidden', screen !== 'landing');
+  instructionsScreen?.classList.toggle('hidden', screen !== 'instructions');
+  gameScreen?.classList.toggle('hidden', screen !== 'game');
+}
+
+function onMoveErrorButtonClick() {
+  if (appState.mode === 'demo' && demoState.active) {
+    void advanceDemoStep();
+    return;
+  }
+  hideMoveError();
+}
+
+async function advanceDemoStep() {
+  if (!demoState.active || demoState.running) return;
+  if (demoState.stepIndex >= DEMO_STEPS.length) return;
+
+  const step = DEMO_STEPS[demoState.stepIndex];
+  demoState.stepIndex += 1;
+  demoState.running = true;
+
+  showMoveMessage(step.message, 'Next', true);
+
+  const version = demoState.version;
+  const completed = await playDemoStep(step, version);
+  if (!completed || !isDemoVersionActive(version)) return;
+
+  demoState.running = false;
+  render();
+
+  if (demoState.stepIndex >= DEMO_STEPS.length) {
+    if (moveErrorOkBtn) {
+      moveErrorOkBtn.disabled = true;
+    }
+
+    demoState.finalTimer = window.setTimeout(() => {
+      if (appState.mode === 'demo') {
+        enterGamePlay({ freshBoard: true });
+      }
+    }, DEMO_FINAL_PAUSE_MS);
+    return;
+  }
+
+  if (moveErrorOkBtn) {
+    moveErrorOkBtn.disabled = false;
+  }
+}
+
+/**
+ * @param {DemoStep} step
+ * @param {number} version
+ * @returns {Promise<boolean>}
+ */
+async function playDemoStep(step, version) {
+  const animated = await animateDemoPath(step, version);
+  if (!animated || !isDemoVersionActive(version)) return false;
+
+  applyDemoResolution(step);
+  clearDemoAnimation();
+  render();
+  return true;
+}
+
+/**
+ * @param {DemoStep} step
+ * @param {number} version
+ * @returns {Promise<boolean>}
+ */
+async function animateDemoPath(step, version) {
+  if (!isDemoVersionActive(version)) return false;
+
+  const sourceColor = state.tiles[step.sourceIndex];
+  const sourcePoint = getTileCenter(step.sourceIndex);
+  setDemoAnimation(step.sourceIndex, sourceColor, sourcePoint.x, sourcePoint.y);
+  render();
+
+  /** @type {{x:number,y:number}[]} */
+  const waypoints = [...step.pathIndices, step.targetIndex].map((index) => getTileCenter(index));
+
+  let currentPoint = sourcePoint;
+  for (const destination of waypoints) {
+    const moved = await tweenDemoPosition(currentPoint, destination, DEMO_HOP_MS, version);
+    if (!moved) return false;
+    currentPoint = destination;
+  }
+
+  if (step.illegalReturn) {
+    const paused = await waitForDemoMs(160, version);
+    if (!paused) return false;
+
+    const returned = await tweenDemoPosition(currentPoint, sourcePoint, DEMO_RETURN_MS, version);
+    if (!returned) return false;
+  }
+
+  return true;
+}
+
+/**
+ * @param {{x:number,y:number}} from
+ * @param {{x:number,y:number}} to
+ * @param {number} durationMs
+ * @param {number} version
+ * @returns {Promise<boolean>}
+ */
+function tweenDemoPosition(from, to, durationMs, version) {
+  return new Promise((resolve) => {
+    const startedAt = performance.now();
+
+    /**
+     * @param {number} now
+     */
+    function frame(now) {
+      if (!isDemoVersionActive(version)) {
+        resolve(false);
+        return;
+      }
+
+      const progress = Math.min(1, (now - startedAt) / durationMs);
+      const eased = easeInOutCubic(progress);
+
+      demoAnimation.x = from.x + (to.x - from.x) * eased;
+      demoAnimation.y = from.y + (to.y - from.y) * eased;
+      render();
+
+      if (progress < 1) {
+        requestAnimationFrame(frame);
+        return;
+      }
+
+      resolve(true);
+    }
+
+    requestAnimationFrame(frame);
+  });
+}
+
+/**
+ * @param {number} ms
+ * @param {number} version
+ * @returns {Promise<boolean>}
+ */
+function waitForDemoMs(ms, version) {
+  return new Promise((resolve) => {
+    window.setTimeout(() => {
+      resolve(isDemoVersionActive(version));
+    }, ms);
+  });
+}
+
+/**
+ * @param {number} t
+ * @returns {number}
+ */
+function easeInOutCubic(t) {
+  return t < 0.5
+    ? 4 * t * t * t
+    : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+/**
+ * @param {number} version
+ * @returns {boolean}
+ */
+function isDemoVersionActive(version) {
+  return demoState.active && appState.mode === 'demo' && demoState.version === version;
+}
+
+/**
+ * @param {DemoStep} step
+ */
+function applyDemoResolution(step) {
+  if (step.resolution === 'none') return;
+
+  const nextTiles = [...state.tiles];
+  const sourceColor = state.tiles[step.sourceIndex];
+  const targetColor = state.tiles[step.targetIndex];
+
+  if (step.resolution === 'mix') {
+    const mixed = mix(sourceColor, targetColor);
+    if (!mixed) return;
+
+    nextTiles[step.sourceIndex] = 'white';
+    nextTiles[step.targetIndex] = mixed;
+    state.tiles = nextTiles;
+    return;
+  }
+
+  if (step.resolution === 'white-pair') {
+    nextTiles[step.sourceIndex] = 'white';
+    nextTiles[step.targetIndex] = 'white';
+    state.tiles = nextTiles;
+  }
+}
+
+/**
+ * @param {number} sourceIndex
+ * @param {TileColor} color
+ * @param {number} x
+ * @param {number} y
+ */
+function setDemoAnimation(sourceIndex, color, x, y) {
+  demoAnimation.active = true;
+  demoAnimation.sourceIndex = sourceIndex;
+  demoAnimation.color = color;
+  demoAnimation.x = x;
+  demoAnimation.y = y;
+}
+
+function clearDemoAnimation() {
+  demoAnimation.active = false;
+  demoAnimation.sourceIndex = null;
+  demoAnimation.color = null;
+  demoAnimation.x = 0;
+  demoAnimation.y = 0;
+}
+
+/**
+ * @param {number} index
+ * @returns {{x:number,y:number}}
+ */
+function getTileCenter(index) {
+  const tile = tilesMeta[index];
+  return { x: tile.cx, y: tile.cy };
+}
+
+/**
+ * @param {string} message
+ * @param {string} buttonLabel
+ * @param {boolean} disabled
+ */
+function showMoveMessage(message, buttonLabel, disabled) {
+  if (!moveErrorModal || !moveErrorText || !moveErrorOkBtn) return;
+  moveErrorText.textContent = message;
+  moveErrorOkBtn.textContent = buttonLabel;
+  moveErrorOkBtn.disabled = disabled;
+  moveErrorModal.classList.remove('hidden');
 }
 
 /** @returns {TileColor[]} */
@@ -228,13 +649,78 @@ function createShuffledBoard() {
   for (let i = 0; i < 20; i += 1) {
     colors.push('red', 'blue', 'yellow');
   }
+  shuffleInPlace(colors);
+  return colors;
+}
 
-  for (let i = colors.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [colors[i], colors[j]] = [colors[j], colors[i]];
+/** @returns {TileColor[]} */
+function createDemoBoard() {
+  /** @type {(TileColor|null)[]} */
+  const board = Array.from({ length: tilesMeta.length }, () => null);
+  const remaining = { red: 20, blue: 20, yellow: 20 };
+
+  /** @type {Array<[number,TileColor]>} */
+  const fixedTiles = [
+    [1, 'blue'],
+    [2, 'red'],
+    [3, 'blue'],
+    [4, 'yellow'],
+    [5, 'blue'],
+    [6, 'yellow'],
+    [9, 'red'],
+    [10, 'yellow'],
+    [11, 'blue'],
+    [12, 'red'],
+    [15, 'blue'],
+    [16, 'blue'],
+    [17, 'blue'],
+    [18, 'blue'],
+    [23, 'yellow'],
+    [30, 'red'],
+    [31, 'blue'],
+    [32, 'blue'],
+    [33, 'blue'],
+    [34, 'yellow'],
+    [35, 'yellow'],
+    [36, 'yellow'],
+    [46, 'blue'],
+    [47, 'blue'],
+    [48, 'blue'],
+    [49, 'yellow'],
+    [50, 'yellow'],
+    [51, 'red']
+  ];
+
+  for (const [index, color] of fixedTiles) {
+    board[index] = color;
+    remaining[color] -= 1;
   }
 
-  return colors;
+  /** @type {TileColor[]} */
+  const pool = [];
+  for (let i = 0; i < remaining.red; i += 1) pool.push('red');
+  for (let i = 0; i < remaining.blue; i += 1) pool.push('blue');
+  for (let i = 0; i < remaining.yellow; i += 1) pool.push('yellow');
+  shuffleInPlace(pool);
+
+  for (let i = 0; i < board.length; i += 1) {
+    if (board[i] === null) {
+      board[i] = pool.pop() || 'red';
+    }
+  }
+
+  return /** @type {TileColor[]} */ (board);
+}
+
+/**
+ * @template T
+ * @param {T[]} values
+ */
+function shuffleInPlace(values) {
+  for (let i = values.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [values[i], values[j]] = [values[j], values[i]];
+  }
 }
 
 /**
@@ -281,31 +767,6 @@ function isPrimary(color) {
 }
 
 /**
- * @param {TileColor} color
- * @returns {boolean}
- */
-function isMixed(color) {
-  return MIXED_COLORS.has(color);
-}
-
-/**
- * @param {TileColor} color
- * @returns {boolean}
- */
-function isMovable(color) {
-  return isPrimary(color) || isMixed(color);
-}
-
-/**
- * @param {TileColor} sourceColor
- * @param {TileColor} targetColor
- * @returns {boolean}
- */
-function isEligibleTarget(sourceColor, targetColor) {
-  return targetColor !== 'white' && mix(sourceColor, targetColor) !== null;
-}
-
-/**
  * @param {TileColor} sourceColor
  * @param {TileColor} targetColor
  * @returns {TileColor|null}
@@ -341,15 +802,13 @@ function canDrop(sourceIndex, targetIndex, gameState) {
 
   const source = gameState.tiles[sourceIndex];
   const target = gameState.tiles[targetIndex];
-  if (!isMovable(source) || !isEligibleTarget(source, target)) return false;
+  if (!isPrimary(source) || !isPrimary(target)) return false;
+  if (source === target) return false;
 
-  if (gameState.dragState.sourceIndex === sourceIndex) {
-    if (!gameState.dragState.passedTiles.includes(targetIndex)) return false;
-    if (gameState.dragState.pathColor !== null && target !== gameState.dragState.pathColor) return false;
-    return true;
-  }
+  const neighborSet = new Set(getNeighbors(sourceIndex));
+  if (!neighborSet.has(targetIndex)) return false;
 
-  return getNeighbors(sourceIndex).includes(targetIndex);
+  return mix(source, target) !== null;
 }
 
 /**
@@ -378,11 +837,13 @@ function applyMove(sourceIndex, targetIndex, gameState) {
  * @param {PointerEvent} event
  */
 function onPointerDown(event) {
+  if (appState.mode !== 'play' || appState.screen !== 'game') return;
+
   const sourceIndex = readIndexFromEvent(event);
   if (sourceIndex === null) return;
 
   const color = state.tiles[sourceIndex];
-  if (!isMovable(color)) return;
+  if (!isPrimary(color)) return;
 
   const point = svgPointFromClient(event.clientX, event.clientY);
   state.dragState = {
@@ -403,6 +864,7 @@ function onPointerDown(event) {
  * @param {PointerEvent} event
  */
 function onPointerMove(event) {
+  if (appState.mode !== 'play' || appState.screen !== 'game') return;
   if (state.dragState.sourceIndex === null) return;
 
   const point = svgPointFromClient(event.clientX, event.clientY);
@@ -410,7 +872,7 @@ function onPointerMove(event) {
   state.dragState.pointerY = point.y;
 
   updateHoverTarget();
-  trackDragViolations();
+  trackDragPath();
   render();
 }
 
@@ -418,34 +880,29 @@ function onPointerMove(event) {
  * @param {PointerEvent} event
  */
 function onPointerUp(event) {
+  if (appState.mode !== 'play' || appState.screen !== 'game') return;
   if (state.dragState.sourceIndex === null) return;
 
   const point = svgPointFromClient(event.clientX, event.clientY);
   state.dragState.pointerX = point.x;
   state.dragState.pointerY = point.y;
   updateHoverTarget();
-  trackDragViolations();
+  trackDragPath();
 
   const sourceIndex = state.dragState.sourceIndex;
   const target = state.dragState.hoverTarget;
-  const hasPathViolation =
-    state.dragState.touchedWhite ||
-    state.dragState.touchedIllegalColor ||
-    state.dragState.touchedMultipleTargetColors;
+  const containment = state.dragState.containmentRatio;
   const canCommit =
     typeof target === 'number' &&
     canDrop(sourceIndex, target, state) &&
-    state.dragState.overlapRatio >= DROP_CONTAINMENT_THRESHOLD &&
-    !hasPathViolation;
+    containment >= DROP_CONTAINMENT_THRESHOLD;
 
   if (canCommit) {
-    pushHistorySnapshot();
     const updated = applyMove(sourceIndex, target, state);
-    state.score += countNewWhiteTiles(state.tiles, updated.tiles);
     state.tiles = updated.tiles;
-    hideMoveError();
+    hideMoveError(true);
   } else if (pointerMovedEnough()) {
-    showMoveError(getIllegalMoveMessage(sourceIndex));
+    showMoveError(getIllegalMoveMessage(sourceIndex, containment));
   }
 
   if (boardSvg.hasPointerCapture(event.pointerId)) {
@@ -457,98 +914,18 @@ function onPointerUp(event) {
 }
 
 function cancelDrag() {
+  if (appState.mode !== 'play') return;
   if (state.dragState.sourceIndex === null) return;
   state.dragState = createEmptyDragState();
   render();
 }
 
-/**
- * @param {number[]} seeds
- * @param {TileColor} color
- * @param {TileColor[]} tiles
- * @returns {Set<number>}
- */
-function collectConnectedByColor(seeds, color, tiles) {
-  const connected = new Set();
-  const queue = [];
-
-  for (const idx of seeds) {
-    if (!Number.isInteger(idx)) continue;
-    if (idx < 0 || idx >= tiles.length) continue;
-    if (tiles[idx] !== color) continue;
-    if (connected.has(idx)) continue;
-    connected.add(idx);
-    queue.push(idx);
-  }
-
-  while (queue.length > 0) {
-    const current = queue.shift();
-    const neighbors = getNeighbors(current);
-    for (const next of neighbors) {
-      if (tiles[next] !== color) continue;
-      if (connected.has(next)) continue;
-      connected.add(next);
-      queue.push(next);
-    }
-  }
-
-  return connected;
-}
-
-/**
- * @param {Set<number>} sourceComponent
- * @param {TileColor} sourceColor
- * @param {TileColor[]} tiles
- * @returns {Set<number>}
- */
-function getAdjacentLegalTargets(sourceComponent, sourceColor, tiles) {
-  const candidates = new Set();
-  for (const idx of sourceComponent) {
-    const neighbors = getNeighbors(idx);
-    for (const next of neighbors) {
-      if (sourceComponent.has(next)) continue;
-      if (!isEligibleTarget(sourceColor, tiles[next])) continue;
-      candidates.add(next);
-    }
-  }
-  return candidates;
-}
-
-/**
- * @param {{x:number,y:number}[]} draggedPoly
- * @param {number} tileIndex
- * @returns {number}
- */
-function overlapAreaOnTile(draggedPoly, tileIndex) {
-  const targetPoly = getInnerPolygonAtIndex(tileIndex);
-  const overlapPoly = clipPolygonConvex(draggedPoly, targetPoly);
-  return Math.abs(polygonArea(overlapPoly));
-}
-
-/**
- * @param {{x:number,y:number}[]} draggedPoly
- * @param {number} tileIndex
- * @returns {number}
- */
-function overlapRatioOnTile(draggedPoly, tileIndex) {
-  const targetPoly = getInnerPolygonAtIndex(tileIndex);
-  const overlapPoly = clipPolygonConvex(draggedPoly, targetPoly);
-  const overlapArea = Math.abs(polygonArea(overlapPoly));
-  const targetArea = Math.abs(polygonArea(targetPoly));
-  if (targetArea <= 0) return 0;
-  return overlapArea / targetArea;
-}
-
 function updateHoverTarget() {
   const sourceIndex = state.dragState.sourceIndex;
-  const sourceColor = state.dragState.sourceColor;
-  if (sourceIndex === null || sourceColor === null) {
+  if (sourceIndex === null || state.dragState.sourceColor === null) {
     state.dragState.hoverTarget = null;
     state.dragState.containmentRatio = 0;
     state.dragState.overlapRatio = 0;
-    state.dragState.insideContainer = false;
-    state.dragState.passedTiles = [];
-    state.dragState.pathColor = null;
     return;
   }
 
@@ -558,109 +935,50 @@ function updateHoverTarget() {
     state.dragState.hoverTarget = null;
     state.dragState.containmentRatio = 0;
     state.dragState.overlapRatio = 0;
-    state.dragState.insideContainer = false;
-    state.dragState.passedTiles = [];
-    state.dragState.pathColor = null;
     return;
   }
-
-  const sourceComponent = collectConnectedByColor([sourceIndex], sourceColor, state.tiles);
-  const entryCandidates = getAdjacentLegalTargets(sourceComponent, sourceColor, state.tiles);
-
-  /** @type {TileColor|null} */
-  let pathColor = state.dragState.pathColor;
-  if (pathColor === null) {
-    let bestFirst = null;
-    let bestArea = -1;
-    for (const idx of entryCandidates) {
-      const ratio = overlapRatioOnTile(draggedPoly, idx);
-      if (ratio < TILE_SELECTION_OVERLAP_THRESHOLD) continue;
-      const area = overlapAreaOnTile(draggedPoly, idx);
-      if (area > bestArea) {
-        bestArea = area;
-        bestFirst = idx;
-      }
-    }
-
-    if (bestFirst !== null) {
-      pathColor = state.tiles[bestFirst];
-    }
-  }
-
-  if (pathColor === null) {
-    state.dragState.hoverTarget = null;
-    state.dragState.containmentRatio = 0;
-    state.dragState.overlapRatio = 0;
-    state.dragState.insideContainer = false;
-    state.dragState.passedTiles = [];
-    state.dragState.pathColor = null;
-    return;
-  }
-
-  const entryOfPathColor = [...entryCandidates].filter((idx) => state.tiles[idx] === pathColor);
-  const pathRegion = collectConnectedByColor(entryOfPathColor, pathColor, state.tiles);
-  const passedSet = new Set();
 
   let bestTarget = null;
   let bestContainment = 0;
   let bestOverlap = 0;
-  let bestInsideContainer = false;
 
-  for (const idx of pathRegion) {
-    const targetPoly = getInnerPolygonAtIndex(idx);
-    const clipped = clipPolygonConvex(draggedPoly, targetPoly);
-    const overlapArea = Math.abs(polygonArea(clipped));
+  const neighbors = getNeighbors(sourceIndex);
+  for (const idx of neighbors) {
+    if (!canDrop(sourceIndex, idx, state)) continue;
 
-    if (overlapArea <= 0) continue;
-    const targetArea = Math.abs(polygonArea(targetPoly));
-    const overlapRatio = targetArea > 0 ? overlapArea / targetArea : 0;
-    if (overlapRatio < TILE_SELECTION_OVERLAP_THRESHOLD) continue;
-    passedSet.add(idx);
-
-    const targetOuterPoly = getOuterPolygonAtIndex(idx);
-    const insideContainer = polygonInsideConvex(draggedPoly, targetOuterPoly);
-
-    const containment = overlapRatio;
-    const isBetterCandidate =
-      (insideContainer && !bestInsideContainer) ||
-      (insideContainer === bestInsideContainer && containment > bestContainment);
-
-    if (isBetterCandidate) {
+    const overlap = getOverlapForIndex(draggedPoly, draggedArea, idx);
+    if (!overlap) continue;
+    const containment = overlap.containment;
+    if (containment > bestContainment) {
       bestContainment = containment;
-      bestOverlap = overlapArea / Math.abs(polygonArea(targetPoly));
+      bestOverlap = overlap.targetCoverage;
       bestTarget = idx;
-      bestInsideContainer = insideContainer;
     }
   }
 
   state.dragState.hoverTarget = bestTarget;
   state.dragState.containmentRatio = bestContainment;
   state.dragState.overlapRatio = bestOverlap;
-  state.dragState.insideContainer = bestInsideContainer;
-  state.dragState.passedTiles = [...passedSet];
-  state.dragState.pathColor = pathColor;
 }
 
-function trackDragViolations() {
+function trackDragPath() {
   const sourceIndex = state.dragState.sourceIndex;
   const sourceColor = state.dragState.sourceColor;
   if (sourceIndex === null || sourceColor === null) return;
 
   const draggedPoly = getDraggedInnerPolygon();
-  const overlaps = getOverlappedTileIndices(draggedPoly, TILE_SELECTION_OVERLAP_THRESHOLD);
+  const overlaps = getOverlappedTileIndices(draggedPoly, DRAG_SELECTION_THRESHOLD);
   if (overlaps.length === 0) return;
 
-  const sourceComponent = collectConnectedByColor([sourceIndex], sourceColor, state.tiles);
   const legalTargetColors = getLegalTargetColors(sourceColor);
-
   for (const idx of overlaps) {
-    if (sourceComponent.has(idx)) continue;
-
+    if (idx === sourceIndex) continue;
     const color = state.tiles[idx];
     if (color === 'white') {
       state.dragState.touchedWhite = true;
       continue;
     }
+    if (color === sourceColor) continue;
 
     state.dragState.touchedTargetColors.add(color);
     if (!legalTargetColors.has(color)) {
@@ -673,16 +991,13 @@ function trackDragViolations() {
 
 /**
  * @param {number} sourceIndex
+ * @param {number} containment
  * @returns {string}
  */
-function getIllegalMoveMessage(sourceIndex) {
+function getIllegalMoveMessage(sourceIndex, containment) {
   const sourceColor = state.tiles[sourceIndex];
   const legalTargetColors = getLegalTargetColors(sourceColor);
   const releaseTile = getBestReleaseTile(sourceIndex);
-
-  if (state.dragState.touchedMultipleTargetColors) {
-    return 'You tried to drag your tile across more then one color.';
-  }
 
   if (releaseTile !== null) {
     const releaseColor = state.tiles[releaseTile];
@@ -690,13 +1005,16 @@ function getIllegalMoveMessage(sourceIndex) {
       return 'You tried to drop your tile on a white tile.';
     }
     if (!legalTargetColors.has(releaseColor)) {
-      return 'You tried to drop your tile on an an illegal color.';
+      return 'You tried to drop your tile on an illegal color.';
     }
-    if (state.dragState.overlapRatio < DROP_CONTAINMENT_THRESHOLD) {
+    if (containment < DROP_CONTAINMENT_THRESHOLD) {
       return 'You need to place the tile farther inside the target before dropping.';
     }
   }
 
+  if (state.dragState.touchedMultipleTargetColors) {
+    return 'You tried to drag your tile across more than one color.';
+  }
   if (state.dragState.touchedWhite) {
     return 'You tried to drag your tile across a white tile.';
   }
@@ -712,20 +1030,19 @@ function getIllegalMoveMessage(sourceIndex) {
  */
 function getBestReleaseTile(sourceIndex) {
   const draggedPoly = getDraggedInnerPolygon();
-  const sourceColor = state.tiles[sourceIndex];
-  const sourceComponent = collectConnectedByColor([sourceIndex], sourceColor, state.tiles);
+  const draggedArea = Math.abs(polygonArea(draggedPoly));
+  if (draggedArea <= 0) return null;
 
   let bestIdx = null;
-  let bestRatio = 0;
+  let bestCoverage = 0;
 
   for (const tile of tilesMeta) {
-    const idx = tile.index;
-    if (sourceComponent.has(idx)) continue;
-    const ratio = overlapRatioOnTile(draggedPoly, idx);
-    if (ratio < TILE_SELECTION_OVERLAP_THRESHOLD) continue;
-    if (ratio > bestRatio) {
-      bestRatio = ratio;
-      bestIdx = idx;
+    if (tile.index === sourceIndex) continue;
+    const overlap = getOverlapForIndex(draggedPoly, draggedArea, tile.index);
+    if (!overlap) continue;
+    if (overlap.targetCoverage >= DRAG_SELECTION_THRESHOLD && overlap.targetCoverage > bestCoverage) {
+      bestCoverage = overlap.targetCoverage;
+      bestIdx = tile.index;
     }
   }
 
@@ -734,18 +1051,39 @@ function getBestReleaseTile(sourceIndex) {
 
 /**
  * @param {{x:number,y:number}[]} draggedPoly
- * @param {number} minOverlapRatio
+ * @param {number} minTargetCoverage
  * @returns {number[]}
  */
-function getOverlappedTileIndices(draggedPoly, minOverlapRatio) {
+function getOverlappedTileIndices(draggedPoly, minTargetCoverage) {
+  const draggedArea = Math.abs(polygonArea(draggedPoly));
+  if (draggedArea <= 0) return [];
+
   const overlaps = [];
   for (const tile of tilesMeta) {
-    const ratio = overlapRatioOnTile(draggedPoly, tile.index);
-    if (ratio >= minOverlapRatio) {
+    const overlap = getOverlapForIndex(draggedPoly, draggedArea, tile.index);
+    if (overlap && overlap.targetCoverage >= minTargetCoverage) {
       overlaps.push(tile.index);
     }
   }
   return overlaps;
+}
+
+/**
+ * @param {{x:number,y:number}[]} draggedPoly
+ * @param {number} draggedArea
+ * @param {number} index
+ * @returns {{containment:number,targetCoverage:number}|null}
+ */
+function getOverlapForIndex(draggedPoly, draggedArea, index) {
+  const targetPoly = getInnerPolygonAtIndex(index);
+  const clipped = clipPolygonConvex(draggedPoly, targetPoly);
+  const overlapArea = Math.abs(polygonArea(clipped));
+  if (overlapArea <= 0) return null;
+
+  return {
+    containment: overlapArea / draggedArea,
+    targetCoverage: overlapArea / Math.abs(polygonArea(targetPoly))
+  };
 }
 
 /**
@@ -761,13 +1099,16 @@ function pointerMovedEnough() {
  * @param {string} message
  */
 function showMoveError(message) {
-  if (!moveErrorModal || !moveErrorText) return;
-  moveErrorText.textContent = message;
-  moveErrorModal.classList.remove('hidden');
+  if (appState.mode !== 'play') return;
+  showMoveMessage(message, 'OK', false);
 }
 
-function hideMoveError() {
+/**
+ * @param {boolean} force
+ */
+function hideMoveError(force = false) {
   if (!moveErrorModal) return;
+  if (!force && appState.mode === 'demo') return;
   moveErrorModal.classList.add('hidden');
 }
 
@@ -777,8 +1118,7 @@ function initializeBoardStatic() {
 
   for (const tile of tilesMeta) {
     const outerGroup = createSvgEl('g', {
-      class: 'tile-shell',
-      'data-index': String(tile.index)
+      class: 'tile-shell'
     });
     const innerGroup = createSvgEl('g', {
       class: 'tile-group',
@@ -803,38 +1143,66 @@ function initializeBoardStatic() {
   }
 }
 
-function render() {
-  renderScore();
-  renderUndoState();
-  renderTileSelection();
-  renderInnerTiles();
-  renderPreview();
-  renderDragLayer();
+function initializeLandingBoardStatic() {
+  if (!landingBoardSvg) return;
+
+  landingOuterLayer.innerHTML = '';
+  landingInnerLayer.innerHTML = '';
+
+  for (const tile of tilesMeta) {
+    const outerGroup = createSvgEl('g', {
+      class: 'landing-tile-shell'
+    });
+    const innerGroup = createSvgEl('g', {
+      class: 'landing-tile-group',
+      'data-index': String(tile.index),
+      role: 'img'
+    });
+
+    const outer = createSvgEl('polygon', {
+      class: 'outer',
+      points: pointsToAttr(hexPoints(tile.cx, tile.cy, HEX_RADIUS))
+    });
+
+    const inner = createSvgEl('polygon', {
+      class: 'inner',
+      points: pointsToAttr(hexPoints(tile.cx, tile.cy, INNER_RADIUS))
+    });
+
+    outerGroup.append(outer);
+    innerGroup.append(inner);
+    landingOuterLayer.appendChild(outerGroup);
+    landingInnerLayer.appendChild(innerGroup);
+  }
 }
 
-function renderTileSelection() {
-  const selected = new Set(state.dragState.passedTiles);
-  const shells = outerLayer.querySelectorAll('.tile-shell');
-  shells.forEach((shell) => {
-    const idx = Number(shell.getAttribute('data-index'));
-    shell.classList.toggle('moving-selected', selected.has(idx));
+function renderLandingBoard() {
+  if (!landingBoardSvg) return;
+
+  const groups = landingInnerLayer.querySelectorAll('.landing-tile-group');
+  groups.forEach((group) => {
+    const idx = Number(group.getAttribute('data-index'));
+    const color = landingTiles[idx] || 'red';
+    const inner = group.querySelector('.inner');
+    inner?.setAttribute('fill', COLOR_HEX[color]);
+    group.setAttribute(
+      'aria-label',
+      `Row ${tilesMeta[idx].row + 1}, Column ${tilesMeta[idx].col + 1}, ${color} tile`
+    );
   });
 }
 
-function renderScore() {
-  if (!scoreValueEl) return;
-  scoreValueEl.textContent = String(state.score);
-}
-
-function renderUndoState() {
-  if (!undoBtn) return;
-  undoBtn.textContent = 'Undo';
-  const disabled = state.history.length === 0;
-  undoBtn.disabled = disabled;
+function render() {
+  renderInnerTiles();
+  renderPreview();
+  renderDragLayer();
+  renderDemoLayer();
+  updateScore();
 }
 
 function renderInnerTiles() {
-  const sourceIndex = state.dragState.sourceIndex;
+  const draggedSourceIndex = state.dragState.sourceIndex;
+  const animatedSourceIndex = demoAnimation.active ? demoAnimation.sourceIndex : null;
 
   const groups = innerLayer.querySelectorAll('.tile-group');
   groups.forEach((group) => {
@@ -842,11 +1210,11 @@ function renderInnerTiles() {
     const color = state.tiles[idx];
     const inner = group.querySelector('.inner');
 
-    const displayColor = sourceIndex === idx ? 'white' : color;
+    const displayColor = draggedSourceIndex === idx || animatedSourceIndex === idx ? 'white' : color;
     inner.setAttribute('fill', COLOR_HEX[displayColor]);
 
-    group.classList.toggle('draggable', isMovable(color));
-    group.classList.toggle('dragging-source', sourceIndex === idx);
+    group.classList.toggle('draggable', appState.mode === 'play' && isPrimary(color));
+    group.classList.toggle('dragging-source', draggedSourceIndex === idx);
     group.setAttribute(
       'aria-label',
       `Row ${tilesMeta[idx].row + 1}, Column ${tilesMeta[idx].col + 1}, ${displayColor} tile`
@@ -856,32 +1224,37 @@ function renderInnerTiles() {
 
 function renderPreview() {
   previewLayer.innerHTML = '';
+  if (appState.mode !== 'play') return;
 
   const sourceIndex = state.dragState.sourceIndex;
-  if (sourceIndex === null) return;
+  const targetIndex = state.dragState.hoverTarget;
+  if (sourceIndex === null || targetIndex === null) return;
+
+  if (!canDrop(sourceIndex, targetIndex, state)) return;
 
   const sourceColor = state.tiles[sourceIndex];
+  const targetColor = state.tiles[targetIndex];
+  const mixed = mix(sourceColor, targetColor);
+  if (!mixed) return;
+
   const draggedPoly = getDraggedInnerPolygon();
-  for (const idx of state.dragState.passedTiles) {
-    const targetColor = state.tiles[idx];
-    const mixed = mix(sourceColor, targetColor);
-    if (!mixed) continue;
+  const targetPoly = getInnerPolygonAtIndex(targetIndex);
+  const overlapPoly = clipPolygonConvex(draggedPoly, targetPoly);
+  if (overlapPoly.length < 3) return;
 
-    const targetPoly = getInnerPolygonAtIndex(idx);
-    const overlapPoly = clipPolygonConvex(draggedPoly, targetPoly);
-    if (overlapPoly.length < 3) continue;
+  const preview = createSvgEl('polygon', {
+    class: 'overlap-preview',
+    points: pointsToAttr(overlapPoly),
+    fill: COLOR_HEX[mixed]
+  });
 
-    const preview = createSvgEl('polygon', {
-      class: 'overlap-preview',
-      points: pointsToAttr(overlapPoly),
-      fill: COLOR_HEX[mixed]
-    });
-    previewLayer.appendChild(preview);
-  }
+  previewLayer.appendChild(preview);
 }
 
 function renderDragLayer() {
   dragLayer.innerHTML = '';
+  if (appState.mode !== 'play') return;
+
   const sourceIndex = state.dragState.sourceIndex;
   if (sourceIndex === null || state.dragState.sourceColor === null) return;
 
@@ -892,6 +1265,24 @@ function renderDragLayer() {
     fill: COLOR_HEX[state.dragState.sourceColor]
   });
   dragLayer.appendChild(piece);
+}
+
+function renderDemoLayer() {
+  demoLayer.innerHTML = '';
+  if (!demoAnimation.active || demoAnimation.color === null) return;
+
+  const piece = createSvgEl('polygon', {
+    class: 'drag-inner',
+    points: pointsToAttr(hexPoints(demoAnimation.x, demoAnimation.y, INNER_RADIUS)),
+    fill: COLOR_HEX[demoAnimation.color]
+  });
+  demoLayer.appendChild(piece);
+}
+
+function updateScore() {
+  if (!scoreValueEl) return;
+  const score = state.tiles.reduce((acc, tile) => (tile === 'white' ? acc + 1 : acc), 0);
+  scoreValueEl.textContent = String(score);
 }
 
 /** @returns {{x:number,y:number}[]} */
@@ -912,15 +1303,6 @@ function getDraggedInnerPolygon() {
 function getInnerPolygonAtIndex(index) {
   const tile = tilesMeta[index];
   return hexPoints(tile.cx, tile.cy, INNER_RADIUS);
-}
-
-/**
- * @param {number} index
- * @returns {{x:number,y:number}[]}
- */
-function getOuterPolygonAtIndex(index) {
-  const tile = tilesMeta[index];
-  return hexPoints(tile.cx, tile.cy, HEX_RADIUS);
 }
 
 /**
@@ -1023,39 +1405,6 @@ function clipPolygonConvex(subject, clipper) {
 }
 
 /**
- * @param {{x:number,y:number}[]} subject
- * @param {{x:number,y:number}[]} container
- * @returns {boolean}
- */
-function polygonInsideConvex(subject, container) {
-  if (subject.length < 3 || container.length < 3) return false;
-  return subject.every((point) => pointInsideConvex(point, container));
-}
-
-/**
- * @param {{x:number,y:number}} point
- * @param {{x:number,y:number}[]} polygon
- * @returns {boolean}
- */
-function pointInsideConvex(point, polygon) {
-  const windingArea = polygonArea(polygon);
-  const epsilon = 0.75;
-
-  for (let i = 0; i < polygon.length; i += 1) {
-    const a = polygon[i];
-    const b = polygon[(i + 1) % polygon.length];
-    const cross = (b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x);
-    if (windingArea >= 0) {
-      if (cross < -epsilon) return false;
-    } else if (cross > epsilon) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-/**
  * @param {{x:number,y:number}} p
  * @param {{x:number,y:number}} a
  * @param {{x:number,y:number}} b
@@ -1127,8 +1476,8 @@ function readIndexFromEvent(event) {
 }
 
 /**
- * @param {string} row
- * @param {string} col
+ * @param {number} row
+ * @param {number} col
  * @returns {string}
  */
 function keyOf(row, col) {
@@ -1154,26 +1503,4 @@ function createSvgEl(name, attrs = {}) {
  */
 function pointsToAttr(points) {
   return points.map((p) => `${p.x.toFixed(3)},${p.y.toFixed(3)}`).join(' ');
-}
-
-/**
- * @param {TileColor[]} before
- * @param {TileColor[]} after
- * @returns {number}
- */
-function countNewWhiteTiles(before, after) {
-  let count = 0;
-  for (let i = 0; i < before.length; i += 1) {
-    if (before[i] !== 'white' && after[i] === 'white') {
-      count += 1;
-    }
-  }
-  return count;
-}
-
-function pushHistorySnapshot() {
-  state.history.push({
-    tiles: [...state.tiles],
-    score: state.score
-  });
 }
