@@ -12,11 +12,9 @@
         <header class="topbar landing-topbar">
           <div class="title-block">
             <h1>Colors</h1>
-            <p class="subtitle">Drag colors to create new colors. All three primary colors clear the cell.</p>
+            <p class="subtitle">Drag colors to create new colors. All three primary colors clear the cell.<br />You get one point for every empty cell. Try to clear the whole board!</p>
           </div>
           <div class="hero-actions landing-actions">
-            <button id="landing-start-game-btn" type="button">Start Game</button>
-            <button id="landing-how-to-btn" type="button">Instructions</button>
             <button id="landing-demo-btn" type="button">Watch Demo</button>
           </div>
         </header>
@@ -37,57 +35,84 @@
             <li>Path and target-color rules determine whether a move is legal.</li>
           </ul>
           <div class="hero-actions">
-            <button id="instructions-start-game-btn" type="button">Start Game</button>
             <button id="instructions-demo-btn" type="button">Watch Demo</button>
-            <button id="instructions-back-btn" type="button">Back</button>
+            <button id="instructions-exit-btn" type="button">Exit</button>
           </div>
         </div>
       </section>
 
       <section id="game-screen" class="screen game-screen hidden">
-        <header class="topbar">
-          <div class="title-block">
-            <h2>Colors</h2>
-            <p class="subtitle">Drag colors to create new colors. All three primary colors clear the cell.</p>
-            <p class="score-pill">Score: <span id="score-value">0</span></p>
-          </div>
-          <div class="topbar-actions">
-            <section
-              id="move-error-modal"
-              class="move-error hidden"
-              role="dialog"
-              aria-modal="false"
-              aria-live="polite"
-              aria-label="Move message"
-            >
-              <p id="move-error-text" class="move-error-text"></p>
-              <div class="move-error-actions">
-                <button id="move-error-ok-btn" type="button">OK</button>
-                <button id="demo-start-game-btn" class="hidden" type="button">Start game</button>
+        <div class="game-shell">
+          <header class="topbar">
+            <div class="title-block">
+              <div class="title-row">
+                <h2>Colors</h2>
+                <p class="score-pill">Score: <span id="score-value">0</span></p>
               </div>
-            </section>
-          </div>
-        </header>
+              <p class="subtitle">Drag colors to create new colors. All three primary colors clear the cell.<br />You get one point for every empty cell. Try to clear the whole board!</p>
+            </div>
+            <div class="topbar-actions">
+              <section
+                id="move-error-modal"
+                class="move-error hidden"
+                role="dialog"
+                aria-modal="false"
+                aria-live="polite"
+                aria-label="Move message"
+              >
+                <p id="move-error-text" class="move-error-text"></p>
+                <div class="move-error-actions">
+                  <button id="demo-exit-btn" class="hidden" type="button">Exit</button>
+                  <button id="move-error-ok-btn" type="button">OK</button>
+                </div>
+              </section>
+            </div>
+          </header>
 
-        <section class="controls" aria-label="Game controls">
-          <button id="play-instructions-btn" type="button">Instructions</button>
-          <button id="reset-btn" type="button">Reset</button>
-          <button id="new-board-btn" type="button">New Board</button>
-        </section>
+          <section class="controls" aria-label="Game controls">
+            <button id="play-demo-btn" type="button">Watch Demo</button>
+            <button id="undo-btn" type="button">Undo</button>
+            <button id="reset-btn" type="button">Reset</button>
+            <button id="new-board-btn" type="button">New Board</button>
+          </section>
 
-        <section class="legend" aria-label="Color legend">
-          <span class="legend-item"><span class="swatch red"></span>Red</span>
-          <span class="legend-item"><span class="swatch blue"></span>Blue</span>
-          <span class="legend-item"><span class="swatch yellow"></span>Yellow</span>
-          <span class="legend-item"><span class="swatch purple"></span>Purple</span>
-          <span class="legend-item"><span class="swatch green"></span>Green</span>
-          <span class="legend-item"><span class="swatch orange"></span>Orange</span>
-          <span class="legend-item"><span class="swatch white"></span>White</span>
-        </section>
+          <section class="legend" aria-label="Color mixing legend">
+            <span class="mix-equation">
+              <span class="legend-item"><span class="swatch red"></span>Red</span>
+              <span class="legend-op">+</span>
+              <span class="legend-item"><span class="swatch blue"></span>Blue</span>
+              <span class="legend-op">=</span>
+              <span class="legend-item"><span class="swatch purple"></span>Purple</span>
+            </span>
+            <span class="mix-equation">
+              <span class="legend-item"><span class="swatch blue"></span>Blue</span>
+              <span class="legend-op">+</span>
+              <span class="legend-item"><span class="swatch yellow"></span>Yellow</span>
+              <span class="legend-op">=</span>
+              <span class="legend-item"><span class="swatch green"></span>Green</span>
+            </span>
+            <span class="mix-equation">
+              <span class="legend-item"><span class="swatch red"></span>Red</span>
+              <span class="legend-op">+</span>
+              <span class="legend-item"><span class="swatch yellow"></span>Yellow</span>
+              <span class="legend-op">=</span>
+              <span class="legend-item"><span class="swatch orange"></span>Orange</span>
+            </span>
+            <span class="mix-equation">
+              <span class="legend-item"><span class="swatch red"></span>Red</span>
+              <span class="legend-op">+</span>
+              <span class="legend-item"><span class="swatch blue"></span>Blue</span>
+              <span class="legend-op">+</span>
+              <span class="legend-item"><span class="swatch yellow"></span>Yellow</span>
+              <span class="legend-op">=</span>
+              <span class="legend-item"><span class="swatch white"></span>White</span>
+            </span>
+          </section>
 
-        <section class="board-wrap" aria-label="Colors board">
-          <svg id="board" role="img" aria-label="Hex board"></svg>
-        </section>
+          <section class="board-wrap" aria-label="Colors board">
+            <svg id="board" role="img" aria-label="Hex board"></svg>
+          </section>
+        </div>
       </section>
     </main>
 

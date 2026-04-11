@@ -14,7 +14,10 @@ const ROW_SPACING = 1.5 * HEX_RADIUS;
 const BOARD_PADDING = HEX_RADIUS + 10;
 
 const DRAG_SELECTION_THRESHOLD = 0.6;
-const DROP_CONTAINMENT_THRESHOLD = 0.9;
+const BETWEEN_TILES_CONTACT_THRESHOLD = 0.1;
+const BETWEEN_TILES_DIRECTION_TOLERANCE_DEG = 18;
+const MIN_DIRECTION_STEP_DISTANCE = 1.5;
+const DROP_CONTAINMENT_THRESHOLD = 0.75;
 const DRAG_DISTANCE_THRESHOLD = 6;
 
 const DEMO_INTRO_MESSAGE = 'Click through these message for an intro into how Colors is played.';
@@ -26,19 +29,30 @@ const COLOR_HEX = {
   red: '#d94037',
   blue: '#2763d8',
   yellow: '#f0c419',
-  purple: '#7a3db8',
+  purple: '#b58ae0',
   green: '#2fa36b',
-  orange: '#e18223',
+  orange: '#f29b5f',
   white: '#ffffff'
 };
 
-const MIX_RESULTS = {
+const COLOR_COMPONENTS = {
+  red: ['red'],
+  blue: ['blue'],
+  yellow: ['yellow'],
+  purple: ['red', 'blue'],
+  green: ['blue', 'yellow'],
+  orange: ['red', 'yellow'],
+  white: ['red', 'blue', 'yellow']
+};
+
+const COMPONENT_KEY_TO_COLOR = {
+  red: 'red',
+  blue: 'blue',
+  yellow: 'yellow',
   'blue:red': 'purple',
-  'red:blue': 'purple',
-  'yellow:red': 'orange',
-  'red:yellow': 'orange',
   'blue:yellow': 'green',
-  'yellow:blue': 'green'
+  'red:yellow': 'orange',
+  'blue:red:yellow': 'white'
 };
 
 /** @typedef {{index:number,row:number,col:number,cx:number,cy:number}} TileMeta */
@@ -58,6 +72,16 @@ const MIX_RESULTS = {
  * @property {boolean} touchedIllegalColor
  * @property {boolean} touchedWhite
  * @property {boolean} touchedMultipleTargetColors
+ * @property {boolean} touchedBetweenTiles
+ * @property {number} lastTrackedPointerX
+ * @property {number} lastTrackedPointerY
+ * @property {TileColor|null} chosenTravelColor
+ * @property {boolean} touchedSourceAfterChoosingColor
+ */
+
+/**
+ * @typedef {Object} GameSnapshot
+ * @property {TileColor[]} tiles
  */
 
 /**
@@ -65,11 +89,13 @@ const MIX_RESULTS = {
  * @property {TileColor[]} tiles
  * @property {TileColor[]} initialTiles
  * @property {DragState} dragState
+ * @property {GameSnapshot[]} history
  */
 
 /**
  * @typedef {Object} DemoStep
  * @property {string} message
+ * @property {boolean} [messageOnly]
  * @property {number} sourceIndex
  * @property {number} targetIndex
  * @property {number[]} pathIndices
@@ -79,28 +105,26 @@ const MIX_RESULTS = {
 
 const boardSvg = document.getElementById('board');
 const landingBoardSvg = document.getElementById('landing-board');
-const playInstructionsBtn = document.getElementById('play-instructions-btn');
+const playDemoBtn = document.getElementById('play-demo-btn');
+const undoBtn = document.getElementById('undo-btn');
 const resetBtn = document.getElementById('reset-btn');
 const newBoardBtn = document.getElementById('new-board-btn');
 
 const moveErrorModal = document.getElementById('move-error-modal');
 const moveErrorText = document.getElementById('move-error-text');
 const moveErrorOkBtn = document.getElementById('move-error-ok-btn');
+const moveErrorActions = moveErrorModal?.querySelector('.move-error-actions');
 const scoreValueEl = document.getElementById('score-value');
 
 const landingScreen = document.getElementById('landing-screen');
 const instructionsScreen = document.getElementById('instructions-screen');
 const gameScreen = document.getElementById('game-screen');
 
-const landingStartGameBtn = document.getElementById('landing-start-game-btn');
-const landingHowToBtn = document.getElementById('landing-how-to-btn');
 const landingDemoBtn = document.getElementById('landing-demo-btn');
 
-const instructionsStartGameBtn = document.getElementById('instructions-start-game-btn');
 const instructionsDemoBtn = document.getElementById('instructions-demo-btn');
-const instructionsBackBtn = document.getElementById('instructions-back-btn');
-
-const demoStartGameBtn = document.getElementById('demo-start-game-btn');
+const instructionsExitBtn = document.getElementById('instructions-exit-btn');
+const demoExitBtn = document.getElementById('demo-exit-btn');
 
 const tilesMeta = buildTileMeta();
 const indexByRowCol = new Map(tilesMeta.map((tile) => [keyOf(tile.row, tile.col), tile.index]));
@@ -124,19 +148,21 @@ landingBoardSvg?.append(landingOuterLayer, landingInnerLayer);
 const state = {
   tiles: createShuffledBoard(),
   initialTiles: [],
-  dragState: createEmptyDragState()
+  dragState: createEmptyDragState(),
+  history: []
 };
 state.initialTiles = [...state.tiles];
 let landingTiles = createShuffledBoard();
 
 const appState = {
   /** @type {ScreenName} */
-  screen: 'landing',
+  screen: 'game',
   /** @type {PlayMode} */
   mode: 'play'
 };
-/** @type {'landing'|'game'} */
-let instructionsReturnScreen = 'landing';
+
+/** @type {{tiles:TileColor[], initialTiles:TileColor[], history:GameSnapshot[]}|null} */
+let playSnapshot = null;
 
 const demoState = {
   active: false,
@@ -158,7 +184,17 @@ const demoAnimation = {
 const DEMO_STEPS = [
   {
     message:
-      'A blue tile is moved onto a neighboring red tile to produce a purple tile. One white tile is created and adds to the score.',
+      'You get one point for every white tile created. Maximum score is 60 points.',
+    messageOnly: true,
+    sourceIndex: 0,
+    targetIndex: 0,
+    pathIndices: [],
+    resolution: 'none',
+    illegalReturn: false
+  },
+  {
+    message:
+      'A blue tile moves onto a neighboring red tile to produce a purple tile. One white tile is created and adds to the score.',
     sourceIndex: 1,
     targetIndex: 2,
     pathIndices: [],
@@ -167,7 +203,7 @@ const DEMO_STEPS = [
   },
   {
     message:
-      'A yellow tile is moved onto a neighboring blue tile to produce a green tile. One white tile is created and adds to the score.',
+      'A yellow tile moves onto a neighboring blue tile to produce a green tile. One white tile is created and adds to the score.',
     sourceIndex: 4,
     targetIndex: 5,
     pathIndices: [],
@@ -176,7 +212,7 @@ const DEMO_STEPS = [
   },
   {
     message:
-      'A red tile is moved onto a neighboring yellow tile to produce an orange tile. One white tile is created and adds to the score.',
+      'A red tile moves onto a neighboring yellow tile to produce an orange tile. One white tile is created and adds to the score.',
     sourceIndex: 9,
     targetIndex: 10,
     pathIndices: [],
@@ -230,20 +266,29 @@ const DEMO_STEPS = [
   },
   {
     message:
-      'A red tile tried to move onto a white tile. No tile is allowed to move onto a white tile so the move is illegal.',
+      'A red tile tries to move onto a white tile. No tile is allowed to move onto a white tile so the move is illegal.',
     sourceIndex: 12,
     targetIndex: 11,
     pathIndices: [],
     resolution: 'none',
     illegalReturn: true
+  },
+  {
+    message:
+      'You score one for every tile you clear. There are 60 tiles, 20 of each color, so the maximum score is 60. Good luck!',
+    messageOnly: true,
+    sourceIndex: 0,
+    targetIndex: 0,
+    pathIndices: [],
+    resolution: 'none',
+    illegalReturn: false
   }
 ];
 
 initializeBoardStatic();
 initializeLandingBoardStatic();
 renderLandingBoard();
-render();
-setScreen('landing');
+enterGamePlay({ freshBoard: true });
 
 boardSvg.addEventListener('pointerdown', onPointerDown);
 boardSvg.addEventListener('pointermove', onPointerMove);
@@ -257,6 +302,7 @@ resetBtn?.addEventListener('click', () => {
   if (appState.mode !== 'play') return;
   state.tiles = [...state.initialTiles];
   state.dragState = createEmptyDragState();
+  state.history = [];
   hideMoveError(true);
   render();
 });
@@ -267,18 +313,29 @@ newBoardBtn?.addEventListener('click', () => {
   state.tiles = [...fresh];
   state.initialTiles = [...fresh];
   state.dragState = createEmptyDragState();
+  state.history = [];
   hideMoveError(true);
   render();
 });
 
-landingStartGameBtn?.addEventListener('click', () => enterGamePlay({ freshBoard: true }));
-landingHowToBtn?.addEventListener('click', enterInstructionsScreen);
+undoBtn?.addEventListener('click', () => {
+  if (appState.mode !== 'play') return;
+  if (state.history.length === 0) return;
+
+  const previous = state.history.pop();
+  if (!previous) return;
+
+  state.tiles = [...previous.tiles];
+  state.dragState = createEmptyDragState();
+  hideMoveError(true);
+  render();
+});
+
 landingDemoBtn?.addEventListener('click', enterDemoMode);
-instructionsStartGameBtn?.addEventListener('click', () => enterGamePlay({ freshBoard: true }));
 instructionsDemoBtn?.addEventListener('click', enterDemoMode);
-instructionsBackBtn?.addEventListener('click', onInstructionsBack);
-demoStartGameBtn?.addEventListener('click', () => enterGamePlay({ freshBoard: true }));
-playInstructionsBtn?.addEventListener('click', enterInstructionsScreen);
+instructionsExitBtn?.addEventListener('click', onInstructionsExit);
+demoExitBtn?.addEventListener('click', exitDemoToGame);
+playDemoBtn?.addEventListener('click', enterDemoMode);
 
 /** @returns {DragState} */
 function createEmptyDragState() {
@@ -295,7 +352,12 @@ function createEmptyDragState() {
     touchedTargetColors: new Set(),
     touchedIllegalColor: false,
     touchedWhite: false,
-    touchedMultipleTargetColors: false
+    touchedMultipleTargetColors: false,
+    touchedBetweenTiles: false,
+    lastTrackedPointerX: 0,
+    lastTrackedPointerY: 0,
+    chosenTravelColor: null,
+    touchedSourceAfterChoosingColor: false
   };
 }
 
@@ -309,21 +371,51 @@ function enterLandingScreen() {
 }
 
 function enterInstructionsScreen() {
-  instructionsReturnScreen = appState.screen === 'game' ? 'game' : 'landing';
   stopDemoMode();
   appState.mode = 'play';
   hideMoveError(true);
   setScreen('instructions');
 }
 
-function onInstructionsBack() {
-  if (instructionsReturnScreen === 'game') {
-    hideMoveError(true);
-    setScreen('game');
-    instructionsReturnScreen = 'landing';
-    return;
+function onInstructionsExit() {
+  hideMoveError(true);
+  setScreen('game');
+  render();
+}
+
+function capturePlaySnapshot() {
+  playSnapshot = {
+    tiles: [...state.tiles],
+    initialTiles: [...state.initialTiles],
+    history: state.history.map((snapshot) => ({ tiles: [...snapshot.tiles] }))
+  };
+}
+
+function restorePlaySnapshot() {
+  if (!playSnapshot) return;
+  state.tiles = [...playSnapshot.tiles];
+  state.initialTiles = [...playSnapshot.initialTiles];
+  state.history = playSnapshot.history.map((snapshot) => ({ tiles: [...snapshot.tiles] }));
+}
+
+function exitDemoToGame() {
+  if (appState.mode !== 'demo') return;
+
+  stopDemoMode();
+  appState.mode = 'play';
+  setScreen('game');
+  gameScreen?.classList.remove('demo-mode');
+
+  if (moveErrorOkBtn) {
+    moveErrorOkBtn.textContent = 'OK';
+    moveErrorOkBtn.disabled = false;
   }
-  enterLandingScreen();
+
+  restorePlaySnapshot();
+  state.dragState = createEmptyDragState();
+  clearDemoAnimation();
+  hideMoveError(true);
+  render();
 }
 
 /**
@@ -337,8 +429,8 @@ function enterGamePlay(options = {}) {
   setScreen('game');
   gameScreen?.classList.remove('demo-mode');
 
-  if (demoStartGameBtn) {
-    demoStartGameBtn.classList.add('hidden');
+  if (demoExitBtn) {
+    demoExitBtn.classList.add('hidden');
   }
 
   if (moveErrorOkBtn) {
@@ -351,6 +443,7 @@ function enterGamePlay(options = {}) {
     const fresh = createShuffledBoard();
     state.tiles = [...fresh];
     state.initialTiles = [...fresh];
+    state.history = [];
   }
 
   state.dragState = createEmptyDragState();
@@ -359,14 +452,15 @@ function enterGamePlay(options = {}) {
 }
 
 function enterDemoMode() {
+  capturePlaySnapshot();
   stopDemoMode();
 
   appState.mode = 'demo';
   setScreen('game');
   gameScreen?.classList.add('demo-mode');
 
-  if (demoStartGameBtn) {
-    demoStartGameBtn.classList.remove('hidden');
+  if (demoExitBtn) {
+    demoExitBtn.classList.remove('hidden');
   }
 
   state.tiles = createDemoBoard();
@@ -393,8 +487,8 @@ function stopDemoMode() {
   demoState.version += 1;
 
   clearDemoAnimation();
-  if (demoStartGameBtn) {
-    demoStartGameBtn.classList.add('hidden');
+  if (demoExitBtn) {
+    demoExitBtn.classList.add('hidden');
   }
 }
 
@@ -441,7 +535,7 @@ async function advanceDemoStep() {
 
     demoState.finalTimer = window.setTimeout(() => {
       if (appState.mode === 'demo') {
-        enterGamePlay({ freshBoard: true });
+        exitDemoToGame();
       }
     }, DEMO_FINAL_PAUSE_MS);
     return;
@@ -458,6 +552,12 @@ async function advanceDemoStep() {
  * @returns {Promise<boolean>}
  */
 async function playDemoStep(step, version) {
+  if (step.messageOnly) {
+    clearDemoAnimation();
+    render();
+    return true;
+  }
+
   const animated = await animateDemoPath(step, version);
   if (!animated || !isDemoVersionActive(version)) return false;
 
@@ -639,6 +739,16 @@ function showMoveMessage(message, buttonLabel, disabled) {
   moveErrorText.textContent = message;
   moveErrorOkBtn.textContent = buttonLabel;
   moveErrorOkBtn.disabled = disabled;
+
+  if (appState.mode === 'demo') {
+    moveErrorOkBtn.classList.remove('hidden');
+    moveErrorActions?.classList.remove('hidden');
+  } else {
+    moveErrorOkBtn.classList.add('hidden');
+    moveErrorOkBtn.disabled = true;
+    moveErrorActions?.classList.add('hidden');
+  }
+
   moveErrorModal.classList.remove('hidden');
 }
 
@@ -767,13 +877,32 @@ function isPrimary(color) {
 }
 
 /**
+ * @param {TileColor} color
+ * @returns {boolean}
+ */
+function isMovable(color) {
+  return color !== 'white';
+}
+
+/**
  * @param {TileColor} sourceColor
  * @param {TileColor} targetColor
  * @returns {TileColor|null}
  */
 function mix(sourceColor, targetColor) {
-  const key = `${sourceColor}:${targetColor}`;
-  return MIX_RESULTS[key] || null;
+  if (!isMovable(sourceColor) || !isMovable(targetColor)) return null;
+
+  const sourceComponents = COLOR_COMPONENTS[sourceColor];
+  const targetComponents = COLOR_COMPONENTS[targetColor];
+
+  const hasOverlap = sourceComponents.some((component) => targetComponents.includes(component));
+  if (hasOverlap) return null;
+
+  const combinedKey = [...new Set([...sourceComponents, ...targetComponents])]
+    .sort()
+    .join(':');
+
+  return COMPONENT_KEY_TO_COLOR[combinedKey] || null;
 }
 
 /**
@@ -782,12 +911,15 @@ function mix(sourceColor, targetColor) {
  */
 function getLegalTargetColors(sourceColor) {
   const legalColors = new Set();
-  for (const key of Object.keys(MIX_RESULTS)) {
-    const [source, target] = key.split(':');
-    if (source === sourceColor) {
-      legalColors.add(/** @type {TileColor} */ (target));
+
+  for (const color of Object.keys(COLOR_HEX)) {
+    const targetColor = /** @type {TileColor} */ (color);
+    if (targetColor === sourceColor || targetColor === 'white') continue;
+    if (mix(sourceColor, targetColor) !== null) {
+      legalColors.add(targetColor);
     }
   }
+
   return legalColors;
 }
 
@@ -802,13 +934,55 @@ function canDrop(sourceIndex, targetIndex, gameState) {
 
   const source = gameState.tiles[sourceIndex];
   const target = gameState.tiles[targetIndex];
-  if (!isPrimary(source) || !isPrimary(target)) return false;
-  if (source === target) return false;
+  if (!isMovable(source) || !isMovable(target)) return false;
+  if (mix(source, target) === null) return false;
 
-  const neighborSet = new Set(getNeighbors(sourceIndex));
-  if (!neighborSet.has(targetIndex)) return false;
+  return hasTravelPath(sourceIndex, targetIndex, gameState);
+}
 
-  return mix(source, target) !== null;
+/**
+ * A move is reachable when the tile can travel on its own color first,
+ * then optionally switch once to the target color, without switching back.
+ * @param {number} sourceIndex
+ * @param {number} targetIndex
+ * @param {GameState} gameState
+ * @returns {boolean}
+ */
+function hasTravelPath(sourceIndex, targetIndex, gameState) {
+  const sourceColor = gameState.tiles[sourceIndex];
+  const targetColor = gameState.tiles[targetIndex];
+
+  const queue = [{ index: sourceIndex, switched: false }];
+  const visited = new Set([`${sourceIndex}:0`]);
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) break;
+
+    const neighbors = getNeighbors(current.index);
+    for (const next of neighbors) {
+      const color = gameState.tiles[next];
+
+      if (color === sourceColor) {
+        if (current.switched) continue;
+        const key = `${next}:0`;
+        if (visited.has(key)) continue;
+        visited.add(key);
+        queue.push({ index: next, switched: false });
+        continue;
+      }
+
+      if (color === targetColor) {
+        if (next === targetIndex) return true;
+        const key = `${next}:1`;
+        if (visited.has(key)) continue;
+        visited.add(key);
+        queue.push({ index: next, switched: true });
+      }
+    }
+  }
+
+  return false;
 }
 
 /**
@@ -843,7 +1017,9 @@ function onPointerDown(event) {
   if (sourceIndex === null) return;
 
   const color = state.tiles[sourceIndex];
-  if (!isPrimary(color)) return;
+  if (!isMovable(color)) return;
+
+  hideMoveError(true);
 
   const point = svgPointFromClient(event.clientX, event.clientY);
   state.dragState = {
@@ -853,7 +1029,9 @@ function onPointerDown(event) {
     startPointerX: point.x,
     startPointerY: point.y,
     pointerX: point.x,
-    pointerY: point.y
+    pointerY: point.y,
+    lastTrackedPointerX: point.x,
+    lastTrackedPointerY: point.y
   };
 
   boardSvg.setPointerCapture(event.pointerId);
@@ -895,14 +1073,18 @@ function onPointerUp(event) {
   const canCommit =
     typeof target === 'number' &&
     canDrop(sourceIndex, target, state) &&
+    isDragPathLegal() &&
     containment >= DROP_CONTAINMENT_THRESHOLD;
 
   if (canCommit) {
+    state.history.push({
+      tiles: [...state.tiles]
+    });
     const updated = applyMove(sourceIndex, target, state);
     state.tiles = updated.tiles;
     hideMoveError(true);
   } else if (pointerMovedEnough()) {
-    showMoveError(getIllegalMoveMessage(sourceIndex, containment));
+    showMoveError(getIllegalMoveMessage(sourceIndex));
   }
 
   if (boardSvg.hasPointerCapture(event.pointerId)) {
@@ -911,6 +1093,19 @@ function onPointerUp(event) {
 
   state.dragState = createEmptyDragState();
   render();
+}
+
+/**
+ * @returns {boolean}
+ */
+function isDragPathLegal() {
+  return (
+    !state.dragState.touchedWhite &&
+    !state.dragState.touchedIllegalColor &&
+    !state.dragState.touchedMultipleTargetColors &&
+    !state.dragState.touchedBetweenTiles &&
+    !state.dragState.touchedSourceAfterChoosingColor
+  );
 }
 
 function cancelDrag() {
@@ -942,8 +1137,9 @@ function updateHoverTarget() {
   let bestContainment = 0;
   let bestOverlap = 0;
 
-  const neighbors = getNeighbors(sourceIndex);
-  for (const idx of neighbors) {
+  for (const tile of tilesMeta) {
+    const idx = tile.index;
+    if (idx === sourceIndex) continue;
     if (!canDrop(sourceIndex, idx, state)) continue;
 
     const overlap = getOverlapForIndex(draggedPoly, draggedArea, idx);
@@ -967,86 +1163,286 @@ function trackDragPath() {
   if (sourceIndex === null || sourceColor === null) return;
 
   const draggedPoly = getDraggedInnerPolygon();
-  const overlaps = getOverlappedTileIndices(draggedPoly, DRAG_SELECTION_THRESHOLD);
-  if (overlaps.length === 0) return;
+  const stepDx = state.dragState.pointerX - state.dragState.lastTrackedPointerX;
+  const stepDy = state.dragState.pointerY - state.dragState.lastTrackedPointerY;
+  const stepDistance = Math.hypot(stepDx, stepDy);
+  state.dragState.lastTrackedPointerX = state.dragState.pointerX;
+  state.dragState.lastTrackedPointerY = state.dragState.pointerY;
 
   const legalTargetColors = getLegalTargetColors(sourceColor);
+  const seamOverlaps = getOverlappedTileIndices(draggedPoly, BETWEEN_TILES_CONTACT_THRESHOLD);
+  const overlaps = getOverlappedTileIndices(draggedPoly, DRAG_SELECTION_THRESHOLD);
+
+  // If there is no clearly centered tile and we are straddling two tiles,
+  // use direction of motion to decide whether this is a legal transition
+  // (toward one tile) or an illegal between-tiles move.
+  if (
+    pointerMovedEnough() &&
+    stepDistance >= MIN_DIRECTION_STEP_DISTANCE &&
+    overlaps.length === 0 &&
+    seamOverlaps.length >= 2
+  ) {
+    const seamPair = getPrimarySeamPair(seamOverlaps);
+    if (seamPair) {
+      const [firstIdx, secondIdx] = seamPair;
+      const firstColor = state.tiles[firstIdx];
+      const secondColor = state.tiles[secondIdx];
+
+      if (firstColor === secondColor) {
+        observePathColor(firstColor, sourceColor, legalTargetColors);
+        state.dragState.touchedMultipleTargetColors = state.dragState.touchedTargetColors.size > 1;
+        return;
+      }
+
+      if (isMotionBetweenTiles(stepDx, stepDy, firstIdx, secondIdx)) {
+        state.dragState.touchedBetweenTiles = true;
+        return;
+      }
+    }
+  }
+
+  if (overlaps.length === 0) return;
   for (const idx of overlaps) {
     if (idx === sourceIndex) continue;
-    const color = state.tiles[idx];
-    if (color === 'white') {
-      state.dragState.touchedWhite = true;
-      continue;
-    }
-    if (color === sourceColor) continue;
-
-    state.dragState.touchedTargetColors.add(color);
-    if (!legalTargetColors.has(color)) {
-      state.dragState.touchedIllegalColor = true;
-    }
+    observePathColor(state.tiles[idx], sourceColor, legalTargetColors);
   }
 
   state.dragState.touchedMultipleTargetColors = state.dragState.touchedTargetColors.size > 1;
 }
 
 /**
- * @param {number} sourceIndex
- * @param {number} containment
- * @returns {string}
+ * @param {TileColor} color
+ * @param {TileColor} sourceColor
+ * @param {Set<TileColor>} legalTargetColors
  */
-function getIllegalMoveMessage(sourceIndex, containment) {
-  const sourceColor = state.tiles[sourceIndex];
-  const legalTargetColors = getLegalTargetColors(sourceColor);
-  const releaseTile = getBestReleaseTile(sourceIndex);
-
-  if (releaseTile !== null) {
-    const releaseColor = state.tiles[releaseTile];
-    if (releaseColor === 'white') {
-      return 'You tried to drop your tile on a white tile.';
+function observePathColor(color, sourceColor, legalTargetColors) {
+  if (color === 'white') {
+    state.dragState.touchedWhite = true;
+    return;
+  }
+  if (color === sourceColor) {
+    if (state.dragState.chosenTravelColor !== null) {
+      state.dragState.touchedSourceAfterChoosingColor = true;
     }
-    if (!legalTargetColors.has(releaseColor)) {
-      return 'You tried to drop your tile on an illegal color.';
-    }
-    if (containment < DROP_CONTAINMENT_THRESHOLD) {
-      return 'You need to place the tile farther inside the target before dropping.';
-    }
+    return;
   }
 
-  if (state.dragState.touchedMultipleTargetColors) {
-    return 'You tried to drag your tile across more than one color.';
+  state.dragState.touchedTargetColors.add(color);
+  if (!legalTargetColors.has(color)) {
+    state.dragState.touchedIllegalColor = true;
+    return;
   }
-  if (state.dragState.touchedWhite) {
-    return 'You tried to drag your tile across a white tile.';
+
+  if (state.dragState.chosenTravelColor === null) {
+    state.dragState.chosenTravelColor = color;
+  } else if (state.dragState.chosenTravelColor !== color) {
+    state.dragState.touchedMultipleTargetColors = true;
   }
-  if (state.dragState.touchedIllegalColor) {
-    return 'You tried to drag your tile across an illegal color.';
+}
+
+/**
+ * Pick the seam pair to evaluate from overlapped tiles.
+ * @param {number[]} overlappedIndices
+ * @returns {[number, number]|null}
+ */
+function getPrimarySeamPair(overlappedIndices) {
+  if (overlappedIndices.length < 2) return null;
+
+  let bestPair = null;
+  let bestDistance = Infinity;
+
+  for (let i = 0; i < overlappedIndices.length; i += 1) {
+    const a = overlappedIndices[i];
+    const aNeighbors = new Set(getNeighbors(a));
+    for (let j = i + 1; j < overlappedIndices.length; j += 1) {
+      const b = overlappedIndices[j];
+      if (!aNeighbors.has(b)) continue;
+
+      const dx = tilesMeta[a].cx - tilesMeta[b].cx;
+      const dy = tilesMeta[a].cy - tilesMeta[b].cy;
+      const distance = Math.hypot(dx, dy);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestPair = [a, b];
+      }
+    }
   }
-  return 'That move is not legal.';
+
+  if (bestPair) return /** @type {[number, number]} */ (bestPair);
+  return [overlappedIndices[0], overlappedIndices[1]];
+}
+
+/**
+ * @param {number} motionDx
+ * @param {number} motionDy
+ * @param {number} firstIndex
+ * @param {number} secondIndex
+ * @returns {boolean}
+ */
+function isMotionBetweenTiles(motionDx, motionDy, firstIndex, secondIndex) {
+  const motionMag = Math.hypot(motionDx, motionDy);
+  if (motionMag < MIN_DIRECTION_STEP_DISTANCE) return false;
+
+  const betweenDx = tilesMeta[secondIndex].cx - tilesMeta[firstIndex].cx;
+  const betweenDy = tilesMeta[secondIndex].cy - tilesMeta[firstIndex].cy;
+  const betweenMag = Math.hypot(betweenDx, betweenDy);
+  if (betweenMag < 1e-6) return false;
+
+  const dot = motionDx * betweenDx + motionDy * betweenDy;
+  const cosTheta = Math.max(-1, Math.min(1, dot / (motionMag * betweenMag)));
+  const angleDeg = (Math.acos(cosTheta) * 180) / Math.PI;
+  const distanceTo60 = Math.abs(angleDeg - 60);
+  const distanceTo120 = Math.abs(angleDeg - 120);
+
+  return (
+    distanceTo60 <= BETWEEN_TILES_DIRECTION_TOLERANCE_DEG ||
+    distanceTo120 <= BETWEEN_TILES_DIRECTION_TOLERANCE_DEG
+  );
 }
 
 /**
  * @param {number} sourceIndex
- * @returns {number|null}
+ * @returns {string}
  */
-function getBestReleaseTile(sourceIndex) {
+function getIllegalMoveMessage(sourceIndex) {
+  const sourceColor = state.tiles[sourceIndex];
+  const sourceTile = colorTilePhrase(sourceColor);
+  const legalTargetColors = getLegalTargetColors(sourceColor);
+  const release = getBestReleaseCandidate(sourceIndex);
+  const releaseTile = release.index;
+
+  // 1) First check placement accuracy on the intended target.
+  if (releaseTile === null) {
+    return 'You tried to drop a tile outside the target zone. Try again.';
+  }
+
+  const releaseColor = state.tiles[releaseTile];
+  if (release.containment < DROP_CONTAINMENT_THRESHOLD) {
+    return 'You tried to drop a tile outside the target zone. Try again.';
+  }
+
+  // 2) Next check the selected target tile color legality.
+  if (releaseColor === 'white') {
+    return 'You tried to drop a tile onto an empty space. That is illegal.';
+  }
+  if (sourceColor === releaseColor) {
+    return 'You tried to drop a tile on another tile of the same color. That is illegal.';
+  }
+  if (mix(sourceColor, releaseColor) === null) {
+    const sourceComponents = COLOR_COMPONENTS[sourceColor];
+    const targetComponents = COLOR_COMPONENTS[releaseColor];
+    const sharedComponents = sourceComponents.filter((component) => targetComponents.includes(component));
+
+    if (sharedComponents.length > 0) {
+      const sharedPhrase =
+        sharedComponents.length === 1
+          ? sharedComponents[0]
+          : formatColorList(sharedComponents);
+      if (sourceComponents.length > 1 && targetComponents.length > 1) {
+        return `You tried to drop ${sourceTile} on ${colorTilePhrase(releaseColor)} but both contain ${sharedPhrase} so that is illegal.`;
+      }
+      return `You tried to drop ${sourceTile} on ${colorTilePhrase(releaseColor)} but ${releaseColor} contains ${sharedPhrase} so that is illegal.`;
+    }
+
+    return `You tried to drop ${sourceTile} on ${colorTilePhrase(releaseColor)}. That is illegal.`;
+  }
+
+  // 3) Finally, check whether the traveled path is legal.
+  if (state.dragState.touchedBetweenTiles) {
+    return 'You moved your tile between two tiles. That is illegal: your tile must move from one tile to another one its way to its target.';
+  }
+  if (state.dragState.touchedMultipleTargetColors) {
+    return 'You moved your tile over more than one target color. That is illegal.';
+  }
+  if (state.dragState.touchedSourceAfterChoosingColor) {
+    return "You moved your tile back to its own color after choosing a target color. That is illegal.";
+  }
+  if (state.dragState.touchedWhite) {
+    return 'You tried to move your tile over an empty space. That is illegal.';
+  }
+  if (state.dragState.touchedIllegalColor) {
+    const illegalPathColors = [...state.dragState.touchedTargetColors].filter(
+      (color) => !legalTargetColors.has(color)
+    );
+    if (illegalPathColors.length > 0) {
+      return `You moved ${sourceTile} across ${formatColorList(illegalPathColors)}. That travel color is illegal.`;
+    }
+    return `You moved ${sourceTile} across an illegal travel color.`;
+  }
+  if (!canDrop(sourceIndex, releaseTile, state)) {
+    return `You tried to place ${sourceTile} on ${colorTilePhrase(releaseColor)}, but there is no legal path to that target.`;
+  }
+  return `You tried to place ${sourceTile} on ${colorTilePhrase(releaseColor)} in an illegal way.`;
+}
+
+/**
+ * @param {number} sourceIndex
+ * @returns {{index:number|null, containment:number, targetCoverage:number}}
+ */
+function getBestReleaseCandidate(sourceIndex) {
   const draggedPoly = getDraggedInnerPolygon();
   const draggedArea = Math.abs(polygonArea(draggedPoly));
-  if (draggedArea <= 0) return null;
+  if (draggedArea <= 0) {
+    return { index: null, containment: 0, targetCoverage: 0 };
+  }
 
   let bestIdx = null;
+  let bestContainment = 0;
   let bestCoverage = 0;
 
   for (const tile of tilesMeta) {
     if (tile.index === sourceIndex) continue;
     const overlap = getOverlapForIndex(draggedPoly, draggedArea, tile.index);
     if (!overlap) continue;
-    if (overlap.targetCoverage >= DRAG_SELECTION_THRESHOLD && overlap.targetCoverage > bestCoverage) {
+    if (overlap.targetCoverage > bestCoverage) {
       bestCoverage = overlap.targetCoverage;
+      bestContainment = overlap.containment;
       bestIdx = tile.index;
     }
   }
 
-  return bestIdx;
+  if (bestCoverage < DRAG_SELECTION_THRESHOLD || bestIdx === null) {
+    return { index: null, containment: bestContainment, targetCoverage: bestCoverage };
+  }
+
+  return { index: bestIdx, containment: bestContainment, targetCoverage: bestCoverage };
+}
+
+/**
+ * @param {TileColor} color
+ * @returns {string}
+ */
+function colorLabel(color) {
+  return color;
+}
+
+/**
+ * @param {TileColor} color
+ * @returns {string}
+ */
+function colorTilePhrase(color) {
+  const article = startsWithVowelSound(color) ? 'an' : 'a';
+  return `${article} ${color} tile`;
+}
+
+/**
+ * @param {string} word
+ * @returns {boolean}
+ */
+function startsWithVowelSound(word) {
+  return /^[aeiou]/i.test(word);
+}
+
+/**
+ * @param {TileColor[]} colors
+ * @returns {string}
+ */
+function formatColorList(colors) {
+  const labels = colors.map((color) => colorLabel(color));
+  if (labels.length === 0) return 'an unknown color';
+  if (labels.length === 1) return labels[0];
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  return `${labels.slice(0, -1).join(', ')}, and ${labels[labels.length - 1]}`;
 }
 
 /**
@@ -1198,6 +1594,7 @@ function render() {
   renderDragLayer();
   renderDemoLayer();
   updateScore();
+  updateUndoButtonState();
 }
 
 function renderInnerTiles() {
@@ -1213,7 +1610,7 @@ function renderInnerTiles() {
     const displayColor = draggedSourceIndex === idx || animatedSourceIndex === idx ? 'white' : color;
     inner.setAttribute('fill', COLOR_HEX[displayColor]);
 
-    group.classList.toggle('draggable', appState.mode === 'play' && isPrimary(color));
+    group.classList.toggle('draggable', appState.mode === 'play' && isMovable(color));
     group.classList.toggle('dragging-source', draggedSourceIndex === idx);
     group.setAttribute(
       'aria-label',
@@ -1283,6 +1680,13 @@ function updateScore() {
   if (!scoreValueEl) return;
   const score = state.tiles.reduce((acc, tile) => (tile === 'white' ? acc + 1 : acc), 0);
   scoreValueEl.textContent = String(score);
+}
+
+function updateUndoButtonState() {
+  if (!undoBtn) return;
+
+  const enabled = appState.mode === 'play' && state.history.length > 0;
+  undoBtn.disabled = !enabled;
 }
 
 /** @returns {{x:number,y:number}[]} */

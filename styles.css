@@ -4,13 +4,15 @@
   --card: #fffdf8;
   --line: #2b3840;
   --shadow: rgba(0, 0, 0, 0.12);
+  --board-render-width: min(86vw, 760px);
+  --board-shell-width: calc(var(--board-render-width) + 1rem + 4px);
 
   --red: #d94037;
   --blue: #2763d8;
   --yellow: #f0c419;
-  --purple: #7a3db8;
+  --purple: #b58ae0;
   --green: #2fa36b;
-  --orange: #e18223;
+  --orange: #f29b5f;
   --white: #ffffff;
 }
 
@@ -108,8 +110,26 @@ body {
   gap: 1rem;
 }
 
+.game-screen {
+  text-align: left;
+}
+
+.game-shell {
+  width: var(--board-shell-width);
+  max-width: 100%;
+  margin: 0 auto;
+}
+
 .title-block {
   min-width: 0;
+  flex: 1 1 auto;
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
 }
 
 .title-block h2 {
@@ -124,7 +144,7 @@ body {
 }
 
 .score-pill {
-  margin: 0.55rem 0 0;
+  margin: 0;
   width: fit-content;
   padding: 0.35rem 0.72rem;
   border: 2px solid #2a353a;
@@ -137,8 +157,9 @@ body {
   flex: 0 1 430px;
   display: flex;
   flex-direction: column;
-  align-items: stretch;
+  align-items: flex-end;
   gap: 0.5rem;
+  max-width: 430px;
 }
 
 .move-error {
@@ -147,6 +168,7 @@ body {
   background: #fff2ee;
   padding: 0.6rem 0.75rem;
   box-shadow: 0 3px 10px var(--shadow);
+  width: min(430px, 100%);
 }
 
 .move-error.hidden {
@@ -163,6 +185,7 @@ body {
   display: flex;
   align-items: center;
   gap: 0.55rem;
+  width: 100%;
 }
 
 .move-error button {
@@ -170,7 +193,7 @@ body {
   padding: 0.35rem 0.9rem;
 }
 
-#demo-start-game-btn {
+.game-screen.demo-mode #move-error-ok-btn {
   margin-left: auto;
 }
 
@@ -212,9 +235,28 @@ button:focus-visible {
 
 .legend {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.65rem 1rem;
+  flex-wrap: nowrap;
+  gap: 0.9rem;
   margin-bottom: 1rem;
+  align-items: center;
+  overflow-x: auto;
+  padding-bottom: 0.15rem;
+  white-space: nowrap;
+}
+
+.mix-equation {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid rgba(43, 56, 64, 0.25);
+  border-radius: 999px;
+  background: rgba(255, 253, 248, 0.8);
+}
+
+.legend-op {
+  font-weight: 700;
+  opacity: 0.8;
 }
 
 .legend-item {
@@ -251,10 +293,14 @@ button:focus-visible {
   margin: 0 auto;
 }
 
+.game-shell .board-wrap {
+  width: 100%;
+}
+
 #board,
 #landing-board {
   display: block;
-  width: min(86vw, 760px);
+  width: var(--board-render-width);
   max-width: 100%;
   margin: 0 auto;
   user-select: none;
@@ -305,6 +351,10 @@ button:focus-visible {
 @media (max-width: 720px) {
   .topbar {
     flex-direction: column;
+  }
+
+  .game-shell {
+    width: 100%;
   }
 
   .topbar-actions,
