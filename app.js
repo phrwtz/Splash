@@ -18,8 +18,7 @@ const PATH_COLOR_OVERLAP_THRESHOLD = 0.2001;
 const DROP_CONTAINMENT_THRESHOLD = 0.6;
 const DRAG_DISTANCE_THRESHOLD = 6;
 
-const DEMO_INTRO_MESSAGE = 'Click through these message for an intro into how Colors is played.';
-const DEMO_FINAL_PAUSE_MS = 3000;
+const DEMO_INTRO_MESSAGE = 'Click through this demo to see how Splash is played.';
 const DEMO_HOP_MS = 430;
 const DEMO_RETURN_MS = 340;
 
@@ -271,7 +270,7 @@ const DEMO_STEPS = [
   },
   {
     message:
-      'You score one for every tile you clear. There are 60 tiles, 20 of each color, so the maximum score is 60. Good luck!',
+      'See if you can make all the tiles white!',
     messageOnly: true,
     sourceIndex: 0,
     targetIndex: 0,
@@ -524,13 +523,8 @@ async function advanceDemoStep() {
   if (demoState.stepIndex >= DEMO_STEPS.length) {
     if (moveErrorOkBtn) {
       moveErrorOkBtn.disabled = true;
+      moveErrorOkBtn.classList.add('hidden');
     }
-
-    demoState.finalTimer = window.setTimeout(() => {
-      if (appState.mode === 'demo') {
-        exitDemoToGame();
-      }
-    }, DEMO_FINAL_PAUSE_MS);
     return;
   }
 
