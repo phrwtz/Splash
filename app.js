@@ -243,6 +243,15 @@ const DEMO_STEPS = [
   },
   {
     message:
+      "Tiles don't have to move in straight lines. They can change direction within the same color.",
+    sourceIndex: 31,
+    targetIndex: 35,
+    pathIndices: [32, 39, 40, 41, 34],
+    resolution: 'mix',
+    illegalReturn: false
+  },
+  {
+    message:
       'A blue tile tries to land on a purple tile but that tile already contains blue so the move is illegal and the tile returns home.',
     sourceIndex: 3,
     targetIndex: 2,
@@ -780,6 +789,9 @@ function createDemoBoard() {
     [34, 'yellow'],
     [35, 'yellow'],
     [36, 'yellow'],
+    [39, 'blue'],
+    [40, 'blue'],
+    [41, 'yellow'],
     [46, 'blue'],
     [47, 'blue'],
     [48, 'blue'],
