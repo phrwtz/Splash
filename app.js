@@ -1736,8 +1736,10 @@ function trackDragPath() {
  * @param {TileColor} color
  */
 function observeTraversedColor(color) {
-  if (!state.dragState.traversedColors.includes(color)) {
-    state.dragState.traversedColors.push(color);
+  const traversed = state.dragState.traversedColors;
+  const lastColor = traversed[traversed.length - 1];
+  if (lastColor !== color) {
+    traversed.push(color);
   }
 }
 
@@ -1748,11 +1750,24 @@ function observeTraversedColor(color) {
  * @returns {TileColor|null}
  */
 function getFirstIllegalTraversedColor(sourceColor, targetColor, traversedColors) {
+  /** @type {TileColor[]} */
+  const travelSequence = [sourceColor];
   for (const color of traversedColors) {
-    if (color !== sourceColor && color !== targetColor) {
-      return color;
+    const lastColor = travelSequence[travelSequence.length - 1];
+    if (color !== lastColor) {
+      travelSequence.push(color);
+      // Rule: once travel has included source color + one other color,
+      // any third traveled color (even source again) is illegal.
+      if (travelSequence.length >= 3) {
+        return color;
+      }
     }
   }
+
+  if (travelSequence.length === 2 && targetColor !== travelSequence[1]) {
+    return targetColor;
+  }
+
   return null;
 }
 
