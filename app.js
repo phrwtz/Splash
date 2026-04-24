@@ -1767,16 +1767,10 @@ function observeTraversedColor(color) {
 function getTraversedPathColorsForDrop(sourceColor, targetColor, traversedColors) {
   /** @type {TileColor[]} */
   const travelSequence = [];
-  let leftSourceColor = false;
 
   for (const color of traversedColors) {
-    if (!leftSourceColor) {
-      // Ignore any initial run over the source color until the drag first leaves it.
-      if (color === sourceColor) {
-        continue;
-      }
-      leftSourceColor = true;
-    }
+    // A tile's own color is never counted as a passed-through color.
+    if (color === sourceColor) continue;
 
     const lastColor = travelSequence[travelSequence.length - 1];
     if (color !== lastColor) {
@@ -1799,13 +1793,12 @@ function getTraversedPathColorsForDrop(sourceColor, targetColor, traversedColors
  * @returns {string|null}
  */
 function getIllegalPathColorMessage(sourceColor, targetColor, traversedPathColors) {
-  // Passing over any white space always takes precedence over other path errors.
   if (traversedPathColors.includes('white')) {
-    return 'You dropped that tile over a white space before placing it. That is illegal and the tile returned home.';
+    return 'You moved your tile onto a white space. That is illegal and the tile returned home.';
   }
 
-  if (traversedPathColors.length > 2) {
-    return `You passed ${colorTilePhrase(sourceColor)} over too many colors before placing it. After leaving its own color, a legal path may include at most one passed-through color and then the target color. That is illegal and the tile returned home.`;
+  if (traversedPathColors.length > 1) {
+    return 'You moved your tile over more than one color. That is illegal and the tile returned home.';
   }
 
   return null;
