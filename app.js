@@ -126,6 +126,7 @@ const moveErrorActions = moveErrorModal?.querySelector('.move-error-actions');
 const scoreValueEl = document.getElementById('score-value');
 const bestScoreValueEl = document.getElementById('best-score-value');
 const undoCountValueEl = document.getElementById('undo-count-value');
+const boardTimerValueEl = document.getElementById('board-timer-value');
 const noMovesNoticeEl = document.getElementById('no-moves-notice');
 const gameSubtitleEl = document.getElementById('game-subtitle');
 
@@ -186,6 +187,8 @@ analysisBtn?.classList.toggle('hidden', !analysisUnlocked);
 let bestScore = readBestScore();
 let noLegalMovesLeft = false;
 let undoCount = 0;
+let boardTimerStartMs = null;
+let boardTimerTickId = null;
 
 const analysisSessionState = {
   /** @type {TileColor[]|null} */
@@ -403,6 +406,7 @@ resetBtn?.addEventListener('click', () => {
   state.dragState = createEmptyDragState();
   state.history = [];
   undoCount = 0;
+  resetBoardTimer();
   clearAnalysisMixFeedback();
   updateNoLegalMovesState();
   hideMoveError(true);
@@ -418,6 +422,7 @@ newBoardBtn?.addEventListener('click', () => {
   state.dragState = createEmptyDragState();
   state.history = [];
   undoCount = 0;
+  resetBoardTimer();
   clearAnalysisMixFeedback();
   if (appState.playVariant === 'analysis') {
     startAnalysisSession(fresh);
@@ -437,6 +442,7 @@ clearBoardBtn?.addEventListener('click', () => {
     tiles: [...state.tiles]
   });
   state.tiles = createEmptyBoard();
+  startBoardTimerIfNeeded();
   state.dragState = createEmptyDragState();
   clearAnalysisMixFeedback();
   updateNoLegalMovesState();
@@ -584,6 +590,7 @@ function enterGamePlay(options = {}) {
     state.tiles = fresh;
     state.initialTiles = [...fresh];
     state.history = [];
+    resetBoardTimer();
 
     if (appState.playVariant === 'analysis') {
       startAnalysisSession(fresh);
@@ -721,6 +728,7 @@ function onAnalysisButtonClick() {
   state.tiles = fresh;
   state.initialTiles = [...fresh];
   state.history = [];
+  resetBoardTimer();
   state.dragState = createEmptyDragState();
 
   if (switchingToAnalysis) {
@@ -1526,6 +1534,7 @@ function onPointerUp(event) {
         });
         const updated = applyMove(sourceIndex, releaseTile, state);
         state.tiles = updated.tiles;
+        startBoardTimerIfNeeded();
         updateNoLegalMovesState();
         hideMoveError(true);
       } else {
@@ -1611,6 +1620,7 @@ function finalizePalettePlacement(event) {
       tiles: [...state.tiles]
     });
     state.tiles[target] = sourceColor;
+    startBoardTimerIfNeeded();
     hideMoveError(true);
     updateNoLegalMovesState();
   } else if (pointerMovedEnough()) {
@@ -2086,6 +2096,7 @@ function render() {
   renderDemoLayer();
   updateScore();
   updateUndoCount();
+  updateBoardTimer();
   renderAnalysisStatus();
   renderNoMovesNotice();
   updateUndoButtonState();
@@ -2980,6 +2991,7 @@ async function runAnalysisBlobTransfer(sourceBlobKey, targetBlobKey) {
         mixedColor
       );
       state.tiles = nextTiles;
+      startBoardTimerIfNeeded();
       movedCount += 1;
       render();
 
@@ -3432,6 +3444,7 @@ function paintAnalysisTile(tileIndex) {
   }
 
   state.tiles[tileIndex] = selectedColor;
+  startBoardTimerIfNeeded();
   updateNoLegalMovesState();
   hideMoveError(true);
 
@@ -3702,6 +3715,45 @@ function updateScore() {
 function updateUndoCount() {
   if (!undoCountValueEl) return;
   undoCountValueEl.textContent = String(undoCount);
+}
+
+function updateBoardTimer() {
+  if (!boardTimerValueEl) return;
+  const elapsedMs = boardTimerStartMs === null ? 0 : Date.now() - boardTimerStartMs;
+  boardTimerValueEl.textContent = formatElapsedTimer(elapsedMs);
+}
+
+function startBoardTimerIfNeeded() {
+  if (boardTimerStartMs !== null) return;
+
+  boardTimerStartMs = Date.now();
+  updateBoardTimer();
+
+  if (boardTimerTickId !== null) return;
+  boardTimerTickId = window.setInterval(() => {
+    if (boardTimerStartMs === null) return;
+    updateBoardTimer();
+  }, 1000);
+}
+
+function resetBoardTimer() {
+  boardTimerStartMs = null;
+  if (boardTimerTickId !== null) {
+    window.clearInterval(boardTimerTickId);
+    boardTimerTickId = null;
+  }
+  updateBoardTimer();
+}
+
+/**
+ * @param {number} elapsedMs
+ * @returns {string}
+ */
+function formatElapsedTimer(elapsedMs) {
+  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes} minutes, ${seconds} seconds`;
 }
 
 /**
