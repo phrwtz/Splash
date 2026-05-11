@@ -2145,6 +2145,35 @@ function renderAnalysisGraph() {
 }
 
 /**
+ * @param {TileColor} sourceColor
+ * @param {TileColor} targetColor
+ * @returns {boolean}
+ */
+function shouldSuppressAnalysisGraphEdge(sourceColor, targetColor) {
+  const sourceComponents = COLOR_COMPONENTS[sourceColor];
+  const targetComponents = COLOR_COMPONENTS[targetColor];
+  if (!sourceComponents || !targetComponents) return false;
+
+  const sourceIsMixed = sourceComponents.length === 2;
+  const targetIsMixed = targetComponents.length === 2;
+  const sourceIsPrimary = sourceComponents.length === 1;
+  const targetIsPrimary = targetComponents.length === 1;
+
+  if (!sourceIsMixed && !targetIsMixed) return false;
+  if (sourceIsMixed && targetIsMixed) return true;
+
+  if (sourceIsMixed && targetIsPrimary) {
+    return mix(sourceColor, targetColor) !== 'white';
+  }
+
+  if (targetIsMixed && sourceIsPrimary) {
+    return mix(targetColor, sourceColor) !== 'white';
+  }
+
+  return false;
+}
+
+/**
  * @param {TileColor[]} tiles
  * @returns {{blobs:Array<{key:string,color:TileColor,members:number[],cx:number,cy:number,label:string}>,edges:Array<[string,string]>,tileToBlob:string[]}}
  */
@@ -2153,6 +2182,8 @@ function buildBlobGraphData(tiles) {
   const tileBlobKey = Array.from({ length: tiles.length }, () => '');
   /** @type {Array<{key:string,color:TileColor,members:number[],cx:number,cy:number,label:string}>} */
   const blobs = [];
+  /** @type {Map<string,TileColor>} */
+  const blobColorByKey = new Map();
 
   for (let i = 0; i < tiles.length; i += 1) {
     if (visited[i]) continue;
@@ -2196,6 +2227,7 @@ function buildBlobGraphData(tiles) {
       cy,
       label: String(members.length)
     });
+    blobColorByKey.set(key, color);
   }
 
   const edgeSet = new Set();
@@ -2209,6 +2241,11 @@ function buildBlobGraphData(tiles) {
       if (tiles[neighbor] === 'white') continue;
       const targetKey = tileBlobKey[neighbor];
       if (!targetKey || targetKey === sourceKey) continue;
+
+      const sourceColor = blobColorByKey.get(sourceKey);
+      const targetColor = blobColorByKey.get(targetKey);
+      if (!sourceColor || !targetColor) continue;
+      if (shouldSuppressAnalysisGraphEdge(sourceColor, targetColor)) continue;
 
       const [a, b] = sourceKey < targetKey
         ? [sourceKey, targetKey]
