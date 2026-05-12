@@ -188,6 +188,7 @@ let bestScore = readBestScore();
 let noLegalMovesLeft = false;
 let undoCount = 0;
 let boardTimerStartMs = null;
+let boardTimerElapsedMs = 0;
 let boardTimerTickId = null;
 
 const analysisSessionState = {
@@ -1258,6 +1259,21 @@ function applyMove(sourceIndex, targetIndex, gameState) {
 
 function updateNoLegalMovesState() {
   noLegalMovesLeft = !hasAnyLegalMoves(state.tiles);
+
+  const timerHasStarted = boardTimerStartMs !== null || boardTimerElapsedMs > 0;
+  if (!timerHasStarted) return;
+
+  if (isBoardCleared(state.tiles) || noLegalMovesLeft) {
+    stopBoardTimer();
+  }
+}
+
+/**
+ * @param {TileColor[]} tiles
+ * @returns {boolean}
+ */
+function isBoardCleared(tiles) {
+  return tiles.every((tile) => tile === 'white');
 }
 
 /**
@@ -3719,7 +3735,8 @@ function updateUndoCount() {
 
 function updateBoardTimer() {
   if (!boardTimerValueEl) return;
-  const elapsedMs = boardTimerStartMs === null ? 0 : Date.now() - boardTimerStartMs;
+  const runningMs = boardTimerStartMs === null ? 0 : Date.now() - boardTimerStartMs;
+  const elapsedMs = boardTimerElapsedMs + runningMs;
   boardTimerValueEl.textContent = formatElapsedTimer(elapsedMs);
 }
 
@@ -3736,8 +3753,23 @@ function startBoardTimerIfNeeded() {
   }, 1000);
 }
 
+function stopBoardTimer() {
+  if (boardTimerStartMs === null) return;
+
+  boardTimerElapsedMs += Date.now() - boardTimerStartMs;
+  boardTimerStartMs = null;
+
+  if (boardTimerTickId !== null) {
+    window.clearInterval(boardTimerTickId);
+    boardTimerTickId = null;
+  }
+
+  updateBoardTimer();
+}
+
 function resetBoardTimer() {
   boardTimerStartMs = null;
+  boardTimerElapsedMs = 0;
   if (boardTimerTickId !== null) {
     window.clearInterval(boardTimerTickId);
     boardTimerTickId = null;
