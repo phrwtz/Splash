@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Splash</title>
-    <link rel="stylesheet" href="styles.css?v=20260827-2" />
+    <link rel="stylesheet" href="styles.css?v=20260909-1" />
   </head>
   <body>
     <main class="app">
@@ -91,6 +91,15 @@
             <button id="clear-board-btn" class="hidden" type="button">Clear Board</button>
             <p id="analysis-mix-feedback" class="analysis-mix-feedback hidden" role="status" aria-live="polite"></p>
           </section>
+          <section id="auto-play-session" class="auto-play-session hidden" aria-label="Auto Play session">
+            <p id="auto-play-status" role="status" aria-live="polite"></p>
+            <div class="auto-play-stats">
+              <span>Session: <span id="auto-play-elapsed">0 minutes, 0 seconds</span></span>
+              <span>Solved: <span id="auto-play-solved">0</span></span>
+              <span>Proved unsolvable: <span id="auto-play-unsolvable">0</span></span>
+              <span>Unknown: <span id="auto-play-unknown">0</span></span>
+            </div>
+          </section>
           <p id="no-moves-notice" class="no-moves-notice hidden" role="status" aria-live="polite">
             There are no legal moves left!
           </p>
@@ -120,6 +129,7 @@
             </section>
 
             <section id="analysis-graph-wrap" class="analysis-graph-wrap hidden" aria-label="Blob graph">
+              <p id="analysis-cluster-count" class="analysis-cluster-count" aria-live="polite">Compact clusters: 0 · Linear clusters: 0</p>
               <svg id="analysis-graph" role="img" aria-label="Blob graph"></svg>
             </section>
           </div>
@@ -127,6 +137,7 @@
       </section>
     </main>
 
-    <script src="app.js?v=20260827-2"></script>
+    <script src="search.js?v=20260909-1"></script>
+    <script src="app.js?v=20260909-1"></script>
   </body>
 </html>
