@@ -32,6 +32,23 @@ const fixture=require('./fixtures.json').backtrack;
  assert.equal(await page.locator('#auto-play-solved').textContent(),'0');assert.equal(await page.locator('#auto-play-unsolvable').textContent(),'0');
  await page.getByRole('button',{name:'Stop',exact:true}).click();await page.clock.runFor(100);await page.close();
  console.log('Passed solution/proof messages, 10-second wait, board cycling, Stop, session reset.');
+ // The original counterexample remains trapped after an unrelated outside
+ // mix. It must be classified before ANY animation, even on a mixed board.
+ page=await setup();
+ await page.evaluate(counter=>{
+  state.tiles=[...counter];state.tiles[19]='white';state.tiles[26]='orange';
+  window.trappedSnapshot=[...state.tiles];window.animations=0;
+  animateAutoPlayMove=async()=>{animations++;throw Error('A trapped board was animated');};
+  render();
+ },counter);
+ await page.getByRole('button',{name:'Auto Play',exact:true}).click();
+ await page.clock.runFor(50);
+ assert.equal(await page.locator('#auto-play-status').textContent(),'Board is unsolvable!');
+ assert.equal(await page.locator('#auto-play-unsolvable').textContent(),'1');
+ assert.equal(await page.evaluate(()=>animations),0);
+ assert.deepEqual(await page.evaluate(()=>state.tiles),await page.evaluate(()=>trappedSnapshot));
+ await page.getByRole('button',{name:'Stop',exact:true}).click();await page.clock.runFor(100);await page.close();
+ console.log('Passed mixed-board corner trap: immediate proof, no animation.');
  // Deadline test: controlled endless exploration, with genuine forward/undo states.
  page=await setup();
  await page.evaluate(()=>{
@@ -68,7 +85,14 @@ const fixture=require('./fixtures.json').backtrack;
  await page.getByRole('button',{name:'Stop',exact:true}).click();await page.clock.runFor(100);await page.close();
  console.log('Passed silent lookahead display stability, Stop, and deadline.');
  page=await setup();
- await page.evaluate(fixture=>{window.trace=[];state.tiles=[...fixture];animateAutoPlayMove=async plan=>{if(plan.sourceIndex>=0&&!isLinkedBlobMove(plan.sourceIndex,plan.targetIndex,state.tiles))throw Error('Illegal forward move');trace.push(plan);return true;};render();},fixture);
+ await page.evaluate(fixture=>{window.trace=[];state.tiles=[...fixture];animateAutoPlayMove=async plan=>{
+  if(plan.sourceIndex>=0){
+   if(!isLinkedBlobMove(plan.sourceIndex,plan.targetIndex,state.tiles))throw Error('Illegal forward move');
+   const after=applyMove(plan.sourceIndex,plan.targetIndex,state).tiles;
+   if(SplashSearch.assess(after,tilesMeta.map(t=>getNeighbors(t.index))).unsolvable)throw Error('A rejected successor was animated');
+  }
+  trace.push(plan);return true;
+ };render();},fixture);
  await page.getByRole('button',{name:'Auto Play',exact:true}).click();
  for(let i=0;i<300 && await page.locator('#auto-play-status').textContent()!=='Solution found!';i++)await page.clock.runFor(500);
  assert.equal(await page.locator('#auto-play-status').textContent(),'Solution found!');

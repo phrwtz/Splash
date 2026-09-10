@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict');
-const {solve}=require('../search.js');
+const {solve,assess}=require('../search.js');
 const fs=require('node:fs');
 const n=['white','red','blue','purple','yellow','orange','green'];
 function oracle(board,adj,memo=new Map()){
@@ -26,6 +26,21 @@ for(const adj of [Array.from({length:6},(_,i)=>[i-1,i+1].filter(j=>j>=0&&j<6)),A
  const memo=new Map();for(let code=0;code<729;code++){let v=code,b=[];for(let i=0;i<6;i++){b.push([1,2,4][v%3]);v=Math.floor(v/3);}if([1,2,4].some(c=>b.filter(v=>v===c).length!==2))continue;
  assert.equal(check(b,adj).result==='solved',oracle(b,adj,memo));total++;}}
 const data=require('./fixtures.json');assert.equal(check(data.board,data.adj).result,'unsolvable');
+// An unrelated, legal mix outside the blue barrier must not disable the
+// corner-red proof just because the board now contains an orange tile.
+const mixedCounter=data.board.slice();mixedCounter[19]=0;mixedCounter[26]=5;
+assert.deepEqual(assess(mixedCounter.map(c=>n[c]),data.adj),{unsolvable:true,reason:{type:'trapped-primary',tile:0,color:'red'}});
+assert.deepEqual(solve(mixedCounter.map(c=>n[c]),data.adj).next(),{done:true,value:'unsolvable'});
+// Three yellows inside the barrier are enough to pass this necessary check.
+// Consuming the extra yellow against a boundary blue reinstates the trap.
+const beforeTrap=data.board.slice();beforeTrap[3]=4;beforeTrap[26]=1;
+assert.equal(assess(beforeTrap.map(c=>n[c]),data.adj).unsolvable,false);
+const afterTrap=beforeTrap.slice();afterTrap[3]=0;afterTrap[4]=6;
+assert.equal(assess(afterTrap.map(c=>n[c]),data.adj).reason.type,'trapped-primary');
+// Both purple regions individually see a yellow, but it is the SAME yellow.
+const sharedBoard=[3,3,4,6,1,4],sharedAdj=[[2],[2],[0,1,3],[2,4,5],[3],[3]];
+assert.equal(oracle(sharedBoard,sharedAdj),false);
+assert.equal(assess(sharedBoard.map(c=>n[c]),sharedAdj).reason.type,'shared-complement-shortage');
 // This fixture used to animate a doomed move before immediately undoing it.
 const regression=check(data.backtrack.map(c=>n.indexOf(c)),data.adj);
 assert.equal(regression.result,'solved');assert(regression.skipped>0);
@@ -43,4 +58,15 @@ for(let code=0;code<2401;code++){
  if(totals[0]!==totals[1]||totals[0]!==totals[2])continue;
  assert.equal(check(b,cycle4).result==='solved',oracle(b,cycle4,mixedMemo));total++;
 }
-console.log(`Passed ${total} exhaustive comparisons; forward/backtrack stack consistency; full-board impossibility certificate.`);
+// Full mixed-color coverage on six-cell graphs protects against unsafe
+// shortcuts in the generalized primary and shared-resource checks.
+for(const adj of [path,[[1,5],[0,2],[1,3],[2,4],[3,5],[4,0]]]){
+ const memo=new Map();
+ for(let code=0;code<117649;code++){
+  let v=code,b=[];for(let i=0;i<6;i++){b.push(v%7);v=Math.floor(v/7);}
+  const totals=[1,2,4].map(bit=>b.reduce((sum,c)=>sum+!!(c&bit),0));
+  if(totals[0]!==totals[1]||totals[0]!==totals[2])continue;
+  assert.equal(check(b,adj).result==='solved',oracle(b,adj,memo),JSON.stringify(b));total++;
+ }
+}
+console.log(`Passed ${total} exhaustive comparisons; mixed-board traps, shared supplies, and forward/backtrack consistency.`);

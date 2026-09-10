@@ -21,3 +21,6 @@ They also check successor lookahead against an independent oracle on balanced
 mixed-color boards and verify that trapped secondary colors are rejected.
 Browser checks cover silent lookahead, including unchanged tiles/history and
 responsive Stop/deadline handling while moves are being discarded.
+
+See [TRAP_DETECTION.md](TRAP_DETECTION.md) for the mixed-board failure,
+the generalized proof checks, validation, and further efficiency options.

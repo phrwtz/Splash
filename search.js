@@ -26,54 +26,92 @@ const SplashSearch = (() => {
     }
     return true;
   }
-  // A singleton primary needing an orange-like connection longer than the
-  // entire enclosed region can supply. Primary blobs never grow, and a
-  // secondary cannot relocate before clearing. See the counterexample proof.
-  function trappedPrimary(board, adjacency, allBlobs) {
-    if (board.some(c=>c && ![1,2,4].includes(c))) return false;
-    const owner = new Map(allBlobs.flatMap(g=>g.map(i=>[i,g])));
-    for (let center=0;center<board.length;center++) {
-      const color=board[center];
-      if (!color || owner.get(center).length!==1) continue;
-      const near=adjacency[center].filter(j=>board[j]);
-      const neighborColors=new Set(near.map(j=>board[j]));
-      if (neighborColors.size!==1) continue;
-      const partner=[...neighborColors][0];
-      if (partner===color) continue;
-      const third=7^color^partner;
-      const partners=[...new Set(near.flatMap(j=>owner.get(j)))];
-      if (partners.some(j=>adjacency[j].some(k=>board[k]===third))) continue;
-      const region=groups(board.flatMap((c,i)=>c===color||c===partner?[i]:[]),adjacency).find(g=>g.includes(center));
-      const capacity=Math.min(region.filter(i=>board[i]===color).length,region.filter(i=>board[i]===partner).length);
-      const distance=Array(board.length).fill(Infinity), queue=[];
-      board.forEach((c,i)=>{if(c===third){distance[i]=0;queue.push(i);}});
-      for(const i of queue) for(const j of adjacency[i]) if(distance[j]===Infinity){distance[j]=distance[i]+1;queue.push(j);}
-      if(Math.min(...[center,...partners].map(i=>distance[i]))>capacity) return true;
-    }
-    return false;
-  }
-  // A secondary can only connect through cells that still could acquire
-  // that same secondary. Other secondaries and white cells cannot help.
-  function trappedSecondary(board, adjacency, allBlobs) {
+  // No move creates a primary, and a secondary stays at its cell until
+  // clearing. For each secondary, build the regions that could ever contain
+  // it. White cells and colors with an overlapping third component can never
+  // become part of such a region. Compute each region once per board.
+  function secondaryRegions(board, adjacency, allBlobs) {
+    const profiles=new Map();
     for (const secondary of [3,5,6]) {
-      if (!board.includes(secondary)) continue;
       const complement=7^secondary;
       const bits=[1,2,4].filter(bit=>secondary&bit);
       const allowed=board.flatMap((c,i)=>c && (c&secondary)===c?[i]:[]);
+      const byCell=Array(board.length).fill(null),regions=[];
       for (const region of groups(allowed,adjacency)) {
         const anchors=region.filter(i=>board[i]===secondary);
-        if (!anchors.length) continue;
         const regionSet=new Set(region);
         const suppliers=allBlobs.filter(g=>board[g[0]]===complement && g.some(i=>adjacency[i].some(j=>regionSet.has(j))));
-        if (suppliers.reduce((sum,g)=>sum+g.length,0)<anchors.length) return true;
         const capacity=Math.min(...bits.map(bit=>region.filter(i=>board[i]&bit).length));
         const distance=Array(board.length).fill(Infinity),queue=[];
         for (const i of region) if (adjacency[i].some(j=>board[j]===complement)) {distance[i]=1;queue.push(i);}
         for (const i of queue) for (const j of adjacency[i]) if (regionSet.has(j) && distance[j]===Infinity) {distance[j]=distance[i]+1;queue.push(j);}
-        if (anchors.some(i=>distance[i]>capacity)) return true;
+        const profile={anchors,capacity,distance,suppliers:suppliers.flat()};
+        regions.push(profile);
+        for (const i of region) byCell[i]=profile;
+      }
+      profiles.set(secondary,{byCell,regions});
+    }
+    return profiles;
+  }
+  function trapReason(board, adjacency, allBlobs) {
+    const profiles=secondaryRegions(board,adjacency,allBlobs);
+    for (const [secondary,{regions}] of profiles) {
+      for (const region of regions) {
+        if (region.suppliers.length<region.anchors.length) return {type:'missing-complement',color:names[secondary]};
+        const tile=region.anchors.find(i=>region.distance[i]>region.capacity);
+        if (tile!==undefined) return {type:'trapped-secondary',tile,color:names[secondary],capacity:region.capacity,required:region.distance[tile]};
+      }
+      // Different secondary regions can compete for the same primary blob.
+      // A clearing consumes a distinct primary tile. Maximum matching checks
+      // all combinations of competing regions without enumerating subsets.
+      const demands=regions.flatMap(r=>r.anchors.map(()=>r.suppliers));
+      const matched=new Map();
+      function assign(demand,seen) {
+        for (const supplier of demands[demand]) {
+          if (seen.has(supplier)) continue;
+          seen.add(supplier);
+          if (!matched.has(supplier)||assign(matched.get(supplier),seen)) {
+            matched.set(supplier,demand);return true;
+          }
+        }
+        return false;
+      }
+      for (let i=0;i<demands.length;i++) if (!assign(i,new Set())) return {type:'shared-complement-shortage',color:names[secondary]};
+    }
+    const owner=new Map(allBlobs.flatMap(g=>g.map(i=>[i,g])));
+    for (const blob of allBlobs) {
+      const color=board[blob[0]];
+      if (![1,2,4].includes(color)) continue;
+      const neighbors=[...new Set(blob.flatMap(i=>adjacency[i]))].filter(i=>board[i] && board[i]!==color);
+      const opposite=profiles.get(7^color);
+      // Optimistically allow a future complementary secondary at any
+      // neighboring cell if its region contains both required components.
+      // This may miss an obstruction, but cannot reject a real solution.
+      if (neighbors.some(i=>opposite.byCell[i]?.capacity>0)) continue;
+      const partners=[...new Set(neighbors.filter(i=>[1,2,4].includes(board[i])).map(i=>owner.get(i)))];
+      // Otherwise this particular primary must first mix with a linked
+      // primary blob. Its component can end up only at its own cell (when
+      // receiving a tile) or somewhere in that partner blob (when moved).
+      for (const tile of blob) {
+        let escape=false;
+        for (const partner of partners) {
+          const region=profiles.get(color|board[partner[0]]).byCell[tile];
+          if ([tile,...partner].some(i=>region.distance[i]<=region.capacity)) {escape=true;break;}
+        }
+        if (!escape) return {type:'trapped-primary',tile,color:names[color]};
       }
     }
-    return false;
+    return null;
+  }
+  function rejectionReason(board,adjacency,allBlobs) {
+    if (!balancedComponents(board,adjacency)) return {type:'unbalanced-component'};
+    return trapReason(board,adjacency,allBlobs);
+  }
+  function assess(tiles,adjacency) {
+    const board=tiles.map(c=>masks[c]);
+    const reason=rejectionReason(board,adjacency,blobs(board,adjacency));
+    // Passing these necessary conditions is not a proof of solvability.
+    return {unsolvable:reason!==null,reason};
   }
   function moves(board, adjacency, allBlobs) {
     const owner=new Map(allBlobs.flatMap((g,k)=>g.map(i=>[i,k]))), links=new Set(), result=[];
@@ -103,7 +141,7 @@ const SplashSearch = (() => {
       if(dead.has(key))return null;
       if(board.every(c=>c===0))return {solved:true};
       const allBlobs=blobs(board,adjacency);
-      if(!balancedComponents(board,adjacency)||trappedPrimary(board,adjacency,allBlobs)||trappedSecondary(board,adjacency,allBlobs)){dead.add(key);return null;}
+      if(rejectionReason(board,adjacency,allBlobs)){dead.add(key);return null;}
       const candidates=moves(board,adjacency,allBlobs);
       if(!candidates.length){dead.add(key);return null;}
       return {key,candidates,solved:false};
@@ -129,6 +167,6 @@ const SplashSearch = (() => {
     }
     return (yield* visit(tiles.map(c=>masks[c])))?'solved':'unsolvable';
   }
-  return {solve};
+  return {solve,assess};
 })();
 if (typeof module !== 'undefined') module.exports = SplashSearch;
