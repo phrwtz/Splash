@@ -1307,6 +1307,12 @@ async function runAutoPlay() {
         const step = search.next();
         if (autoPlayInterrupted()) break;
         if (step.done) { result = step.value; break; }
+        if (step.value.type === 'search') {
+          // Silent lookahead does not touch tiles, history, or animation.
+          // Yield to the browser so Stop and the time limit stay responsive.
+          await waitForAutoPlayMs(0);
+          continue;
+        }
         if (!await animateSearchEvent(step.value)) break;
         // Recognize the final clearing immediately, without consuming an
         // unnecessary inter-move pause from the board's search budget.

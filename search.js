@@ -1,5 +1,5 @@
 /* Complete Splash search. Heuristics order moves; only proved obstructions prune.
- * Each yielded event is one forward move or its exact backtrack. No timer or DOM
+ * Events are forward moves, backtracks, or silent search checkpoints. No timer or DOM
  * dependencies: the player owns the wall-clock limit and animation scheduling.
  */
 const SplashSearch = (() => {
@@ -52,6 +52,29 @@ const SplashSearch = (() => {
     }
     return false;
   }
+  // A secondary can only connect through cells that still could acquire
+  // that same secondary. Other secondaries and white cells cannot help.
+  function trappedSecondary(board, adjacency, allBlobs) {
+    for (const secondary of [3,5,6]) {
+      if (!board.includes(secondary)) continue;
+      const complement=7^secondary;
+      const bits=[1,2,4].filter(bit=>secondary&bit);
+      const allowed=board.flatMap((c,i)=>c && (c&secondary)===c?[i]:[]);
+      for (const region of groups(allowed,adjacency)) {
+        const anchors=region.filter(i=>board[i]===secondary);
+        if (!anchors.length) continue;
+        const regionSet=new Set(region);
+        const suppliers=allBlobs.filter(g=>board[g[0]]===complement && g.some(i=>adjacency[i].some(j=>regionSet.has(j))));
+        if (suppliers.reduce((sum,g)=>sum+g.length,0)<anchors.length) return true;
+        const capacity=Math.min(...bits.map(bit=>region.filter(i=>board[i]&bit).length));
+        const distance=Array(board.length).fill(Infinity),queue=[];
+        for (const i of region) if (adjacency[i].some(j=>board[j]===complement)) {distance[i]=1;queue.push(i);}
+        for (const i of queue) for (const j of adjacency[i]) if (regionSet.has(j) && distance[j]===Infinity) {distance[j]=distance[i]+1;queue.push(j);}
+        if (anchors.some(i=>distance[i]>capacity)) return true;
+      }
+    }
+    return false;
+  }
   function moves(board, adjacency, allBlobs) {
     const owner=new Map(allBlobs.flatMap((g,k)=>g.map(i=>[i,k]))), links=new Set(), result=[];
     board.forEach((c,i)=>{if(c)for(const j of adjacency[i])if(board[j] && !(c&board[j])){
@@ -75,18 +98,34 @@ const SplashSearch = (() => {
   }
   function* solve(tiles, adjacency) {
     const dead=new Set();
-    function* visit(board) {
-      if(board.every(c=>c===0))return true;
+    function prepare(board) {
       const key=board.join('');
-      if(dead.has(key))return false;
+      if(dead.has(key))return null;
+      if(board.every(c=>c===0))return {solved:true};
       const allBlobs=blobs(board,adjacency);
-      if(!balancedComponents(board,adjacency)||trappedPrimary(board,adjacency,allBlobs)){dead.add(key);return false;}
-      for(const move of moves(board,adjacency,allBlobs)){
+      if(!balancedComponents(board,adjacency)||trappedPrimary(board,adjacency,allBlobs)||trappedSecondary(board,adjacency,allBlobs)){dead.add(key);return null;}
+      const candidates=moves(board,adjacency,allBlobs);
+      if(!candidates.length){dead.add(key);return null;}
+      return {key,candidates,solved:false};
+    }
+    function* visit(board, prepared=prepare(board)) {
+      if(!prepared)return false;
+      if(prepared.solved)return true;
+      for(const move of prepared.candidates){
+        // Check the successor before the display changes. These are proofs
+        // of failure, not a claim that every remaining candidate is solvable.
+        const next=prepare(move.next);
+        if(!next){
+          // Give the player a chance to process Stop and the deadline even
+          // when many candidates are rejected without any animation.
+          yield {type:'search'};
+          continue;
+        }
         yield {type:'forward',sourceIndex:move.source,targetIndex:move.target,before:board.map(c=>names[c]),after:move.next.map(c=>names[c])};
-        if(yield* visit(move.next))return true;
+        if(yield* visit(move.next,next))return true;
         yield {type:'backtrack',sourceIndex:move.source,targetIndex:move.target,before:board.map(c=>names[c]),after:move.next.map(c=>names[c])};
       }
-      dead.add(key);return false;
+      dead.add(prepared.key);return false;
     }
     return (yield* visit(tiles.map(c=>masks[c])))?'solved':'unsolvable';
   }

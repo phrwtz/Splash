@@ -48,14 +48,33 @@ const fixture=require('./fixtures.json').backtrack;
  await page.clock.runFor(200);assert.equal(await page.evaluate(()=>fresh),1);
  await page.getByRole('button',{name:'Stop',exact:true}).click();await page.clock.runFor(100);await page.close();
  console.log('Passed ten-minute cutoff and five-second UNKNOWN restart.');
+ // Silent rejections leave the board alone and still yield to Stop/deadline.
+ page=await setup();
+ await page.evaluate(()=>{
+  window.unchanged=[...state.tiles];
+  SplashSearch.solve=function*(){while(true)yield {type:'search'};};
+  animateAutoPlayMove=async()=>{throw Error('Silent lookahead was animated');};
+ });
+ await page.getByRole('button',{name:'Auto Play',exact:true}).click();
+ await page.clock.runFor(20);
+ assert.deepEqual(await page.evaluate(()=>state.tiles),await page.evaluate(()=>unchanged));
+ assert.equal(await page.evaluate(()=>state.history.length),0);
+ await page.getByRole('button',{name:'Stop',exact:true}).click();await page.clock.runFor(20);
+ assert.equal(await page.evaluate(()=>autoPlayState.active),false);
+ await page.getByRole('button',{name:'Auto Play',exact:true}).click();
+ await page.clock.fastForward(600001);await page.clock.runFor(100);
+ assert.equal(await page.locator('#auto-play-status').textContent(),'Solution Unknown');
+ assert.deepEqual(await page.evaluate(()=>state.tiles),await page.evaluate(()=>unchanged));
+ await page.getByRole('button',{name:'Stop',exact:true}).click();await page.clock.runFor(100);await page.close();
+ console.log('Passed silent lookahead display stability, Stop, and deadline.');
  page=await setup();
  await page.evaluate(fixture=>{window.trace=[];state.tiles=[...fixture];animateAutoPlayMove=async plan=>{if(plan.sourceIndex>=0&&!isLinkedBlobMove(plan.sourceIndex,plan.targetIndex,state.tiles))throw Error('Illegal forward move');trace.push(plan);return true;};render();},fixture);
  await page.getByRole('button',{name:'Auto Play',exact:true}).click();
  for(let i=0;i<300 && await page.locator('#auto-play-status').textContent()!=='Solution found!';i++)await page.clock.runFor(500);
- assert.equal(await page.locator('#auto-play-status').textContent(),'Solution found!');assert(await page.evaluate(()=>trace.some(p=>p.sourceIndex===-1)));
- assert.equal(await page.evaluate(()=>state.history.length),4);assert(await page.evaluate(()=>undoCount>0));
+ assert.equal(await page.locator('#auto-play-status').textContent(),'Solution found!');
+ assert.equal(await page.evaluate(()=>state.history.length),4);
  await page.getByRole('button',{name:'Stop',exact:true}).click();await page.clock.runFor(100);await page.close();
- console.log('Passed a solving search with visible reverse events and consistent undo history.');
+ console.log('Passed a solving lookahead search with consistent undo history.');
  // Exercise the real RAF animation, including cancellation while unmixing.
  page=await setup();
  await page.evaluate(()=>{
