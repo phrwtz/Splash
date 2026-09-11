@@ -135,24 +135,82 @@ const SplashSearch = (() => {
     return result.sort((a,b)=>b.score-a.score);
   }
   function* solve(tiles, adjacency) {
-    const dead=new Set();
-    function prepare(board) {
+    const dead=new Set(), winning=new Map();
+    const componentBoard=(board,group)=>{
+      const isolated=Array(board.length).fill(0);
+      for(const i of group)isolated[i]=board[i];
+      return isolated;
+    };
+    const components=board=>groups(board.flatMap((c,i)=>c?[i]:[]),adjacency)
+      .sort((a,b)=>a.length-b.length);
+    // Exact, silent endgame proof. Unknown (budget exhausted) is distinct
+    // from false. Only fully exhausted states enter the dead-state cache.
+    // Store a winning first move so animation can follow the proof directly.
+    function* prove(board,budget) {
+      const key=board.join('');
+      if(dead.has(key))return false;
+      if(winning.has(key)||board.every(c=>!c))return true;
+      if(budget.left--<=0)return null;
+      if((budget.left&31)===31)yield {type:'search'};
+      const allBlobs=blobs(board,adjacency);
+      if(rejectionReason(board,adjacency,allBlobs)){dead.add(key);return false;}
+      const parts=components(board);
+      if(parts.length>1){
+        let unknown=false;
+        for(const part of parts){
+          const isolated=componentBoard(board,part);
+          const result=yield* prove(isolated,budget);
+          if(result===false){dead.add(key);return false;}
+          if(result===null)unknown=true;
+        }
+        if(unknown)return null;
+        const move=winning.get(componentBoard(board,parts[0]).join(''));
+        winning.set(key,move);return true;
+      }
+      for(const move of moves(board,adjacency,allBlobs)){
+        const result=yield* prove(move.next,budget);
+        if(result===true){winning.set(key,{source:move.source,target:move.target});return true;}
+        if(result===null)return null;
+      }
+      dead.add(key);return false;
+    }
+    function* prepare(board) {
       const key=board.join('');
       if(dead.has(key))return null;
       if(board.every(c=>c===0))return {solved:true};
       const allBlobs=blobs(board,adjacency);
       if(rejectionReason(board,adjacency,allBlobs)){dead.add(key);return null;}
-      const candidates=moves(board,adjacency,allBlobs);
+      const parts=components(board),budget={left:4000};
+      // Empty cells are permanent. Each disconnected component must clear
+      // independently, so prove small islands even on a mostly full board.
+      for(const part of parts)if(part.length<=12){
+        if((yield* prove(componentBoard(board,part),budget))===false){dead.add(key);return null;}
+      }
+      // Independent moves commute: finish one component before touching the
+      // next, eliminating all permutations of their move interleavings.
+      const active=parts[0],isolated=componentBoard(board,active);
+      const known=winning.get(isolated.join(''));
+      let candidates;
+      if(known){
+        const next=board.slice(),combined=board[known.source]|board[known.target];
+        next[known.source]=0;next[known.target]=combined===7?0:combined;
+        candidates=[{...known,next}];
+      }else{
+        const activeSet=new Set(active);
+        candidates=moves(isolated,adjacency,allBlobs.filter(g=>activeSet.has(g[0])))
+          .map(move=>{const next=board.slice();next[move.source]=move.next[move.source];next[move.target]=move.next[move.target];return {...move,next};});
+      }
       if(!candidates.length){dead.add(key);return null;}
       return {key,candidates,solved:false};
     }
-    function* visit(board, prepared=prepare(board)) {
+    function* visit(board, prepared) {
+      if(prepared===undefined)prepared=yield* prepare(board);
       if(!prepared)return false;
       if(prepared.solved)return true;
       for(const move of prepared.candidates){
         // Check the successor before the display changes. These are proofs
         // of failure, not a claim that every remaining candidate is solvable.
-        const next=prepare(move.next);
+        const next=yield* prepare(move.next);
         if(!next){
           // Give the player a chance to process Stop and the deadline even
           // when many candidates are rejected without any animation.

@@ -3,7 +3,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs');
 const counter=require('./fixtures.json').board.map(i=>['white','red','blue','purple','yellow','orange','green'][i]);
 const fixture=require('./fixtures.json').backtrack;
 (async()=>{
- const browser=await chromium.launch({headless:true});
+ const browser=await chromium.launch({headless:true, ...(process.env.PLAYWRIGHT_EXECUTABLE_PATH ? {executablePath:process.env.PLAYWRIGHT_EXECUTABLE_PATH} : {})});
  const errors=[];
  async function setup(){const page=await browser.newPage();page.on('pageerror',e=>errors.push(e.message));await page.goto(require('node:url').pathToFileURL(require('node:path').join(__dirname,'..','index.html')).href);await page.clock.install();await page.clock.pauseAt(new Date());return page;}
  let page=await setup();

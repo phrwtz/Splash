@@ -70,3 +70,30 @@ for(const adj of [path,[[1,5],[0,2],[1,3],[2,4],[3,5],[4,0]]]){
  }
 }
 console.log(`Passed ${total} exhaustive comparisons; mixed-board traps, shared supplies, and forward/backtrack consistency.`);
+
+// A locally plausible but impossible island must be proved independently of
+// a solvable island. Previously their interleavings caused 1,439 forward moves.
+const island=[4,2,4,0,1,1,2,5,0,6,3,0];
+const grid=Array.from({length:12},(_,i)=>[i%4?i-1:-1,i%4<3?i+1:-1,i-4,i+4].filter(j=>j>=0&&j<12));
+assert.equal(assess(island.map(c=>n[c]),grid).unsolvable,false);
+assert.equal(oracle(island,grid),false);
+const joined=[1,1,2,2,4,4,...island];
+const joinedAdj=Array.from({length:6},(_,i)=>Array.from({length:6},(_,j)=>j).filter(j=>j!==i))
+ .concat(grid.map(g=>g.map(i=>i+6)));
+const proof=solve(joined.map(c=>n[c]),joinedAdj);let checkpoint=proof.next(),silent=0;
+while(!checkpoint.done){assert.equal(checkpoint.value.type,'search');silent++;checkpoint=proof.next();}
+assert.equal(checkpoint.value,'unsolvable');assert(silent>0&&silent<10);
+// Two solvable components replay cached moves on the full board correctly.
+const twoAdj=[[1],[0,2],[1],[4],[3,5],[4]];
+assert.equal(check([1,2,4,1,2,4],twoAdj).result,'solved');
+// Deterministic mixed nine-cell samples exercise nontrivial endgame proofs
+// against an independent oracle, including valid solutions through splits.
+let seed=1739;const random=()=>((seed=(1664525*seed+1013904223)>>>0)/4294967296);
+const grid9=Array.from({length:9},(_,i)=>[i%3?i-1:-1,i%3<2?i+1:-1,i-3,i+3].filter(j=>j>=0&&j<9));
+const memo9=new Map();
+for(let k=0;k<1000;k++){
+ const b=[0,0,0,1,2,4,3,5,6];
+ for(let i=b.length-1;i;i--){const j=Math.floor(random()*(i+1));[b[i],b[j]]=[b[j],b[i]];}
+ assert.equal(check(b,grid9).result==='solved',oracle(b,grid9,memo9));
+}
+console.log('Passed independent-island pruning, cached solution replay, and 1,000 mixed endgame oracle comparisons.');

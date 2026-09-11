@@ -81,15 +81,32 @@ ten-minute limit to remain responsive. Deeper failures still use backtracking.
 - Browser tests for immediate rejection without animation, successor checks,
   session counters, Stop, time limits, and existing reverse animations.
 
-## Further efficiency work, if harder cases remain
+## Independent components and exact endgames
 
-The next step would be a bounded, cooperative endgame search on small
-remainders, using the existing memoized states. It could prove additional
-dead ends before displaying them. Another option is a shallow extra lookahead
-that rejects a candidate when every continuation is already ruled out.
+Empty cells never become occupied again. Therefore disconnected occupied
+components must each clear independently. Search now finishes the smallest
+component first rather than enumerating interleaved move orders in different
+components. This preserves completeness: moves in different components commute.
 
-Neither should become an unbounded synchronous recursive solver on the main
-browser thread: that would freeze the display and undermine Stop and the
-ten-minute limit. The current changes target the reported trap directly and
-keep complete backtracking as the fallback. They do not claim to recognize
-every unsolvable board immediately.
+Before displaying a successor, the solver also attempts an exact proof for
+each component of at most 12 occupied cells, even if the whole board is large.
+The proof recursively separates components when they split, memoizes failures,
+and records winning moves for direct replay. An impossible island rejects the
+whole board immediately, without playing through unrelated solvable islands.
+`assess` remains the inexpensive necessary-condition check; this additional
+proof runs cooperatively inside `solve`.
+
+Each preparation allows 4,000 new proof states and yields a silent checkpoint
+at the first state and every 32 states afterward. Budget exhaustion means
+unknown, never unsolvable; ordinary complete search remains the fallback.
+Stop and the existing deadline are handled by the player's checkpoint loop.
+Large connected positions can still require substantial search.
+
+The independent-island regression passes the local necessary conditions but
+has no solution. Previously, a solvable six-cell island beside it caused
+1,439 forward events and 23,287 total events before rejection. The revised
+solver rejects it with three silent checkpoints and no forward events.
+A local computation-only measurement was about 206 ms versus 4 ms; this is
+one targeted regression, not a general speed guarantee. Validation adds
+1,000 deterministic mixed-board oracle comparisons, independent-component
+solution replay, and the existing browser checks.
