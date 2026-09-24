@@ -49,6 +49,39 @@ const fixture=require('./fixtures.json').backtrack;
  assert.deepEqual(await page.evaluate(()=>state.tiles),await page.evaluate(()=>trappedSnapshot));
  await page.getByRole('button',{name:'Stop',exact:true}).click();await page.clock.runFor(100);await page.close();
  console.log('Passed mixed-board corner trap: immediate proof, no animation.');
+ // The pictured bridge conflict is proved before any animation. The
+ // solvable version still clears, with every forward successor assessed.
+ const bottleneck=require('./bottleneck.cjs');
+ for(const board of [bottleneck.bad,bottleneck.good]) {
+  page=await setup();
+  await page.evaluate(board=>{
+   state.tiles=board.map(i=>['white','red','blue','purple','yellow','orange','green'][i]);
+   window.snapshot=[...state.tiles];window.animations=0;
+   animateAutoPlayMove=async plan=>{
+    if(plan.sourceIndex>=0) {
+     if(!isLinkedBlobMove(plan.sourceIndex,plan.targetIndex,state.tiles))throw Error('Illegal bottleneck move');
+     const after=applyMove(plan.sourceIndex,plan.targetIndex,state).tiles;
+     if(SplashSearch.assess(after,tilesMeta.map(t=>getNeighbors(t.index))).unsolvable)throw Error('Bottleneck successor animated');
+    }
+    animations++;return true;
+   };render();
+  },board);
+  await page.getByRole('button',{name:'Auto Play',exact:true}).click();
+  for(let i=0;i<300;i++) {
+   await page.clock.runFor(50);
+   if(['Solution found!','Board is unsolvable!'].includes(await page.locator('#auto-play-status').textContent()))break;
+  }
+  if(board===bottleneck.bad) {
+   assert.equal(await page.locator('#auto-play-status').textContent(),'Board is unsolvable!');
+   assert.equal(await page.evaluate(()=>animations),0);
+   assert.deepEqual(await page.evaluate(()=>state.tiles),await page.evaluate(()=>snapshot));
+  }else {
+   assert.equal(await page.locator('#auto-play-status').textContent(),'Solution found!');
+   assert.equal(await page.evaluate(()=>state.tiles.every(c=>c==='white')),true);
+  }
+  await page.getByRole('button',{name:'Stop',exact:true}).click();await page.clock.runFor(100);await page.close();
+ }
+ console.log('Passed pictured bottleneck rejection without animation and solvable-board successor checks.');
  // Deadline test: controlled endless exploration, with genuine forward/undo states.
  page=await setup();
  await page.evaluate(()=>{

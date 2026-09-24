@@ -97,3 +97,36 @@ for(let k=0;k<1000;k++){
  assert.equal(check(b,grid9).result==='solved',oracle(b,grid9,memo9));
 }
 console.log('Passed independent-island pruning, cached solution replay, and 1,000 mixed endgame oracle comparisons.');
+
+// Conflicting secondary routes must be proved without exploring moves.
+const bottleneck=require('./bottleneck.cjs');
+for(const bits of [[1,2,4],[1,4,2],[2,1,4],[2,4,1],[4,1,2],[4,2,1]]) {
+ const rename=b=>b.map(c=>[1,2,4].reduce((v,bit,i)=>v|(c&bit?bits[i]:0),0));
+ const good=rename(bottleneck.good),bad=rename(bottleneck.bad),after=rename(bottleneck.after);
+ assert.equal(assess(good.map(c=>n[c]),bottleneck.adj).unsolvable,false);
+ assert.equal(check(good,bottleneck.adj).result,'solved');
+ for(const b of [bad,after]) {
+  const assessment=assess(b.map(c=>n[c]),bottleneck.adj);
+  assert.equal(assessment.reason.type,'mandatory-color-conflict');
+  assert.equal(assessment.reason.tile,26);
+  assert.deepEqual(solve(b.map(c=>n[c]),bottleneck.adj).next(),{done:true,value:'unsolvable'});
+ }
+ const search=solve(good.map(c=>n[c]),bottleneck.adj);let step;
+ while(!(step=search.next()).done)if(step.value.type==='forward') {
+  assert.equal(assess(step.value.after,bottleneck.adj).unsolvable,false);
+  assert.notDeepEqual(step.value.after,after.map(c=>n[c]));
+ }
+ assert.equal(step.value,'solved');
+}
+// More graph shapes protect the optimistic blob-transfer assumptions:
+// mixed colors, branches, alternate routes, and disconnected components.
+for(let k=0;k<1000;k++) {
+ const b=[0,0,0,1,2,4,3,5,6];
+ for(let i=b.length-1;i;i--){const j=Math.floor(random()*(i+1));[b[i],b[j]]=[b[j],b[i]];}
+ const adj=Array.from({length:9},()=>[]);
+ for(let i=0;i<9;i++)for(let j=i+1;j<9;j++)if(random()<0.3){adj[i].push(j);adj[j].push(i);}
+ const possible=oracle(b,adj),assessment=assess(b.map(c=>n[c]),adj);
+ if(possible)assert.equal(assessment.unsolvable,false,JSON.stringify({b,adj,assessment}));
+ assert.equal(check(b,adj).result==='solved',possible);
+}
+console.log('Passed both pictured boards and unsafe successor under all color permutations; 1,000 additional mixed-graph oracle comparisons.');

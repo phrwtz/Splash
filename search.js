@@ -53,8 +53,7 @@ const SplashSearch = (() => {
     }
     return profiles;
   }
-  function trapReason(board, adjacency, allBlobs) {
-    const profiles=secondaryRegions(board,adjacency,allBlobs);
+  function trapReason(board, adjacency, allBlobs, profiles) {
     for (const [secondary,{regions}] of profiles) {
       for (const region of regions) {
         if (region.suppliers.length<region.anchors.length) return {type:'missing-complement',color:names[secondary]};
@@ -103,9 +102,74 @@ const SplashSearch = (() => {
     }
     return null;
   }
+  // A secondary never moves or changes color. If every optimistic route
+  // for clearing a tile needs a particular cell in that secondary color,
+  // reserve it. Conflicting reservations prove impossibility, even if the
+  // routes would be attempted at different times (white is permanent).
+  function mandatoryColorReason(board, adjacency, allBlobs, profiles) {
+    const owner=new Map(allBlobs.flatMap(g=>g.map(i=>[i,g])));
+    const reservations=new Map(), reachCache=new Map();
+    function reachesBoundary(secondary, blocked) {
+      const key=`${secondary}:${blocked}`;
+      if(reachCache.has(key))return reachCache.get(key);
+      const {byCell}=profiles.get(secondary),seen=new Set(),queue=[];
+      for(let i=0;i<board.length;i++) {
+        if(i!==blocked && byCell[i] && byCell[i].distance[i]===1) {
+          seen.add(i);queue.push(i);
+        }
+      }
+      for(const i of queue)for(const j of adjacency[i]) {
+        if(j!==blocked && byCell[j] && !seen.has(j)){seen.add(j);queue.push(j);}
+      }
+      reachCache.set(key,seen);return seen;
+    }
+    for(let tile=0;tile<board.length;tile++) {
+      const color=board[tile];if(!color)continue;
+      const routes=new Map();
+      function add(secondary, starts, direct=false) {
+        const {byCell}=profiles.get(secondary);
+        const possible=starts.filter(i=>byCell[i] && (direct
+          ? byCell[i].capacity>0
+          : byCell[i].distance[i]<=byCell[i].capacity));
+        if(!possible.length)return;
+        if(!routes.has(secondary))routes.set(secondary,{starts:new Set(),direct});
+        for(const i of possible)routes.get(secondary).starts.add(i);
+      }
+      if([3,5,6].includes(color))add(color,[tile]);
+      else {
+        const blob=owner.get(tile);
+        const neighbors=[...new Set(blob.flatMap(i=>adjacency[i]))]
+          .filter(i=>board[i] && board[i]!==color);
+        // Allow a future complementary secondary beside ANY surviving
+        // member of the primary blob. This is deliberately optimistic.
+        add(7^color,neighbors,true);
+        const partners=new Set(neighbors.filter(i=>[1,2,4].includes(board[i])).map(i=>owner.get(i)));
+        for(const partner of partners)add(color|board[partner[0]],[tile,...partner]);
+      }
+      // Alternative secondary colors do not force a specific color here.
+      if(routes.size!==1)continue;
+      const [secondary,route]=routes.entries().next().value;
+      const starts=[...route.starts];
+      const candidates=route.direct ? (starts.length===1?starts:[])
+        : board.flatMap((_,i)=>profiles.get(secondary).byCell[i]?[i]:[]);
+      for(const cell of candidates) {
+        if(!route.direct && starts.some(i=>reachesBoundary(secondary,cell).has(i)))continue;
+        const previous=reservations.get(cell);
+        if(previous && previous.secondary!==secondary)return {
+          type:'mandatory-color-conflict',tile:cell,
+          colors:[names[previous.secondary],names[secondary]],
+          witnesses:[previous.tile,tile]
+        };
+        reservations.set(cell,{secondary,tile});
+      }
+    }
+    return null;
+  }
   function rejectionReason(board,adjacency,allBlobs) {
     if (!balancedComponents(board,adjacency)) return {type:'unbalanced-component'};
-    return trapReason(board,adjacency,allBlobs);
+    const profiles=secondaryRegions(board,adjacency,allBlobs);
+    return trapReason(board,adjacency,allBlobs,profiles) ||
+      mandatoryColorReason(board,adjacency,allBlobs,profiles);
   }
   function assess(tiles,adjacency) {
     const board=tiles.map(c=>masks[c]);

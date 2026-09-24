@@ -110,3 +110,42 @@ A local computation-only measurement was about 206 ms versus 4 ms; this is
 one targeted regression, not a general speed guarantee. Validation adds
 1,000 deterministic mixed-board oracle comparisons, independent-component
 solution replay, and the existing browser checks.
+
+
+## Mandatory secondary-color conflicts
+
+The assessment also rejects incompatible uses of a cell. For each occupied
+tile, it overestimates every possible clearing route: direct clearing against
+a complementary secondary beside its primary blob, or mixing with any linked
+primary blob (including every possible destination in that blob). Existing
+secondaries keep their own color and position. Routes that exceed the existing
+region-capacity/distance bound are excluded.
+
+When only one secondary color remains possible, remove each possible cell in
+turn from that secondary's allowed region. If no candidate destination can
+reach any complementary-primary boundary without that cell, the cell must
+become that secondary color. Direct-clearing routes reserve a cell only when
+there is a single possible neighboring destination. Two different color
+reservations on one cell prove failure: secondaries cannot change color, and
+cleared cells cannot be reused. Alternative color routes are conservatively
+left unreserved. Paths, destinations, and boundaries overestimate future
+possibilities, so this check can miss traps but must not reject a solution.
+
+Secondary-region profiles are shared with the existing checks. Boundary
+reachability after removal is cached per secondary color and removed cell
+within an assessment. The new test runs after the cheaper existing proofs,
+both on the initial board and during successor preparation before any forward
+event is yielded. Component balance, trapped-primary/secondary checks,
+complement matching, bounded exact island proofs, and complete fallback
+search remain active. Passing structural checks is not a solvability proof;
+autoplay can still backtrack on unresolved boards.
+
+`bottleneck.cjs` reconstructs both pictured boards. The impossible board forces
+cell 26 (row 4, column 4) to be both green and purple. It is rejected with zero
+search events, versus 1,971 previously. The solvable picture still solves.
+Moving its blue at (3,5) onto red at (4,6) is legal but creates the same conflict;
+that successor is rejected before animation. Regressions cover all six primary
+color permutations, 1,000 additional mixed random-graph comparisons against the
+independent exhaustive oracle, and browser checks for immediate rejection and
+safe forward animation. The complete pure-search suite now includes 14,207
+oracle comparisons plus the targeted regressions.

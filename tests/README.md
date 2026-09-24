@@ -25,3 +25,10 @@ responsive Stop/deadline handling while moves are being discarded.
 
 See [TRAP_DETECTION.md](TRAP_DETECTION.md) for the mixed-board failure,
 the generalized proof checks, validation, and further efficiency options.
+
+The bottleneck regressions reconstruct the two user-provided boards, check all
+six primary-color permutations, and verify that a legal move creating a
+mandatory-color conflict is never emitted as a forward move. Browser checks
+verify immediate rejection without animation and successful clearing of the
+solvable board. Additional mixed random graphs exercise alternative routes and
+blob transfers against the independent oracle.
