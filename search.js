@@ -723,12 +723,12 @@ function createSplashSearch() {
   // Verified mode waits for a complete continuation. Progressive mode bounds
   // the planning pass, then emits legal attempts and exact failed-branch undos.
   function* solve(tiles, adjacency, {
-    strategyStates=120000, sectionStates=120000, sectionWidth=8, localStates=1536, planVariants=24, layoutLimit=192, bridgeStates=16384,
+    strategyStates=120000, sectionStates=120000, sectionWidth=8, sectionEndgameTiles=18, sectionEndgameStates=65536, localStates=1536, planVariants=24, layoutLimit=192, bridgeStates=16384,
     history=[], lookaheadStates, endgameTiles, progressive=false, stopBeforeExhaustive=false, strategyOnly=false, batchGroups=0, proofTiles=20, proofStates=16384
   } = {}) {
     // Accept the old options for saved integrations; they no longer authorize
     // speculative playback or change the meaning of an unresolved position.
-    for(const [key,value] of Object.entries({strategyStates,sectionStates,sectionWidth,localStates,planVariants,layoutLimit,bridgeStates,lookaheadStates,endgameTiles,batchGroups,proofTiles,proofStates}))
+    for(const [key,value] of Object.entries({strategyStates,sectionStates,sectionWidth,sectionEndgameTiles,sectionEndgameStates,localStates,planVariants,layoutLimit,bridgeStates,lookaheadStates,endgameTiles,batchGroups,proofTiles,proofStates}))
       if(value!==undefined && (!Number.isSafeInteger(value)||value<0))throw new RangeError(`${key} must be a nonnegative safe integer`);
     const graphKey=JSON.stringify(adjacency);
     if(continuation?.graph===graphKey&&(!strategyOnly||continuation.strategic)){
@@ -938,6 +938,19 @@ function createSplashSearch() {
         const candidates=new Map();
         for(const node of frontier){
           const current=node.board,bs=blobs(current,adjacency);
+          // Immediate clearances can miss a bridge that must be built before
+          // clearing. Verify a bounded endgame before discarding this section.
+          // Unknown leaves section planning active; failure rejects this node.
+          if(sectionEndgameStates&&current.filter(Boolean).length<=sectionEndgameTiles){
+            const proof=exact(current,{left:sectionEndgameStates});
+            let step;
+            try {
+              while(!(step=proof.next()).done)yield {...step.value,phase:'section-endgame'};
+            } finally { proof.return(); }
+            if(step.value===null)continue;
+            if(step.value!==undefined)return [...node.plans,
+              {moves:step.value,goal:null,resources:[],sectionEndgame:true}];
+          }
           const owner=new Map(bs.flatMap(blob=>blob.map(i=>[i,blob])));
           const linked=(a,c)=>a.some(i=>adjacency[i].some(j=>c.includes(j)));
           const offer=(next,path,color,receiver,resources)=>{
@@ -1126,13 +1139,24 @@ function createSplashSearch() {
       if(!structural&&!funding&&!smallFailure) {
         frontiers=[];
         const planningBudget={left:progressive&&!strategyOnly?Math.min(strategyStates,2048):strategyStates};
-        // Fast section planning compares complete clearing jobs, retaining a
-        // bounded frontier. Only a complete solution can bypass batching.
-        // Budget/vocabulary exhaustion simply returns to the layout planner.
-        if(strategyStates&&sectionStates&&sectionWidth&&root.filter(Boolean).length>20&&parts(root).length===1){
-          plans=yield* sectionPlans(root,{left:Math.min(sectionStates,strategyStates)},1);
+        // Retry section planning before the slower layout search. Increasing
+        // both the frontier and its budget preserves alternatives that a
+        // narrow, heuristic ranking may discard. Only full solutions play.
+        const canPlanSections=strategyStates&&sectionStates&&sectionWidth&&
+          root.filter(Boolean).length>20&&parts(root).length===1;
+        let nextSectionWidth=sectionWidth;
+        let nextSectionStates=Math.min(sectionStates,strategyStates);
+        if(canPlanSections){
+          plans=yield* sectionPlans(root,{left:nextSectionStates},1);
           if(plans===null&&sectionWidth>1)
-            plans=yield* sectionPlans(root,{left:Math.min(sectionStates,strategyStates)},sectionWidth);
+            plans=yield* sectionPlans(root,{left:nextSectionStates},nextSectionWidth);
+          // Keep the first retries bounded; later strategic passes continue
+          // widening sections before retrying group layouts.
+          for(let retry=0;plans===null&&strategyOnly&&retry<2;retry++){
+            nextSectionWidth=Math.min(Number.MAX_SAFE_INTEGER,nextSectionWidth*2);
+            nextSectionStates=Math.min(Number.MAX_SAFE_INTEGER,nextSectionStates*2);
+            plans=yield* sectionPlans(root,{left:nextSectionStates},nextSectionWidth);
+          }
         }
         if(plans===null)plans=yield* strategic(root,planningBudget,new Set());
         // Strategy-only runs spend their effort on whole clearing jobs.
@@ -1148,8 +1172,13 @@ function createSplashSearch() {
           layoutLimit=Math.min(Number.MAX_SAFE_INTEGER,Math.max(1,layoutLimit)*2);
           frontiers=[];
           yield {...checkpoint('planning'),strategyPass,
-            message:`Strategic planning pass ${strategyPass}: widening group layouts and donor assignments.`};
-          plans=yield* strategic(root,{left:nextStrategyStates},new Set());
+            message:`Strategic planning pass ${strategyPass}: widening section continuations, group layouts, and donor assignments.`};
+          if(canPlanSections){
+            nextSectionWidth=Math.min(Number.MAX_SAFE_INTEGER,nextSectionWidth*2);
+            nextSectionStates=Math.min(Number.MAX_SAFE_INTEGER,nextSectionStates*2);
+            plans=yield* sectionPlans(root,{left:nextSectionStates},nextSectionWidth);
+          }
+          if(plans===null)plans=yield* strategic(root,{left:nextStrategyStates},new Set());
         }
         if(plans===null&&stopBeforeExhaustive){
           const remaining=root.filter(Boolean).length;
@@ -1212,7 +1241,7 @@ function createSplashSearch() {
             root=next;
           }
         }
-        continuation=complete?{graph:graphKey,events:playback,strategic:plans.every(plan=>plan.goal!==null)}:null;
+        continuation=complete?{graph:graphKey,events:playback,strategic:plans.every(plan=>plan.goal!==null||plan.sectionEndgame===true)}:null;
         if(strategyOnly&&batchGroups)yield {type:'batch-ready',groupsCleared:plans.length,
           remaining:root.filter(Boolean).length,complete,moveCount:playback.length,
           after:root.map(c=>names[c]),

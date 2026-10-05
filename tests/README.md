@@ -365,3 +365,31 @@ node tests/section-browser.cjs
 The browser regression exercises the real Auto Play button, cancellation during
 section planning, legal playback, and the solved counter. It uses the same
 Playwright environment variables as `tests/browser.cjs`.
+
+
+October 5 wider section retries: strategic-only planning now retries section
+frontiers at twice and four times the configured width and check budget before
+entering group layouts. If both planners still stall, each subsequent strategic
+pass doubles the section frontier and budget again before retrying layouts.
+Zero section width, section budget, or strategy budget still disables sections.
+Only complete, legally revalidated section solutions are accepted; exhausted
+passes remain unknown and all retries yield for cancellation and deadlines.
+
+`node tests/widened-section.cjs` reconstructs the second 60-tile screenshot:
+default Auto Play options find all 40 legal moves at width 32. The test verifies
+every transfer independently, requires a full continuation before playback,
+and checks cancellation during widening and disabled section planning.
+Run the actual UI with `SECTION_FIXTURE=./widened-section.cjs node
+tests/section-browser.cjs` using the existing Playwright environment variables.
+
+
+Verified section endgames: at 18 or fewer occupied tiles, section planning
+now tries a bounded exact continuation (`sectionEndgameTiles: 18`,
+`sectionEndgameStates: 65536`). This permits building linked secondary bridges
+before clearing them. Only a complete legal continuation is played; exhausted
+proof budgets remain unknown. The pass yields for cancellation and a fully
+verified section endgame is cached for Stop/resume. Zero states disables it.
+`node tests/section-endgame.cjs` verifies the third 60-tile screenshot in 40
+moves, including its two-green bridge and resumed playback. Run the UI check
+with `SECTION_FIXTURE=./section-endgame.cjs node tests/section-browser.cjs`.
+The prior width regressions disable endgame completion to keep testing widening.
