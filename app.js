@@ -477,7 +477,7 @@ autoPlayBtn?.addEventListener('click', () => {
   if (
     appState.mode !== 'play' ||
     appState.screen !== 'game' ||
-    appState.playVariant !== 'standard'
+    !isAutoPlayAvailable()
   ) return;
   if (autoPlayState.active) {
     autoPlayState.stopRequested = true;
@@ -759,7 +759,7 @@ function updatePlayVariantUi() {
   const inRegularPlayView =
     appState.mode === 'play' &&
     appState.screen === 'game' &&
-    appState.playVariant === 'standard';
+    isAutoPlayAvailable();
   analysisPalette?.classList.toggle('hidden', !inGamePlayView);
   analysisGraphWrap?.classList.toggle('hidden', !inGamePlayView);
   autoPlayBtn?.classList.toggle('hidden', !inRegularPlayView);
@@ -843,7 +843,7 @@ function restoreDemoBoardBeforeScreen(screenIndex) {
 function onAnalysisButtonClick() {
   if (!analysisUnlocked) return;
   if (appState.mode !== 'play' || appState.screen !== 'game') return;
-  if (isAnalysisTransferAnimating()) return;
+  if (isAnalysisTransferAnimating() || autoPlayState.active) return;
   clearAnalysisMixFeedback();
 
   const switchingToAnalysis = appState.playVariant !== 'analysis';
@@ -859,6 +859,7 @@ function onAnalysisButtonClick() {
     startAnalysisSession(state.tiles);
   } else {
     clearAnalysisSession();
+    // Auto Play totals belong to this page lifetime, including mode changes.
   }
   analysisSessionState.selectedColor = null;
   resetAnalysisPaintState();
@@ -1213,15 +1214,14 @@ function updateDemoControls() {
 }
 
 
-const AUTO_PLAY_SEARCH_MS = 10 * 60 * 1000;
-const AUTO_PLAY_RESULT_MS = 10 * 1000;
-const AUTO_PLAY_UNKNOWN_MS = 5 * 1000;
+const AUTO_PLAY_SEARCH_MS = 30 * 60 * 1000;
+const AUTO_PLAY_RESULT_MS = 2 * 1000;
 
 function renderAutoPlaySession() {
   const panel = document.getElementById('auto-play-session');
   const session = autoPlayState.session;
   if (!panel) return;
-  panel.classList.toggle('hidden', !session || appState.playVariant !== 'standard' || appState.mode !== 'play' || appState.screen !== 'game');
+  panel.classList.toggle('hidden', !session || !isAutoPlayAvailable() || appState.mode !== 'play' || appState.screen !== 'game');
   if (!session) return;
   const elapsed = (session.endedAt ?? performance.now()) - session.startedAt;
   document.getElementById('auto-play-elapsed').textContent = formatElapsedTimer(elapsed);
@@ -1252,7 +1252,8 @@ async function animateSearchEvent(event) {
   const path = buildAutoPlayAnimationPath(event.sourceIndex, event.targetIndex, sourceBlob, targetBlob, event.before);
   const backtrack = event.type === 'backtrack';
   const stableTiles = [...state.tiles];
-  autoPlayState.message = backtrack ? 'Backtracking…' : 'Searching…';
+  autoPlayState.message = backtrack ? 'Undoing a proved dead end…' :
+    event.plan ? `${event.plan.description} — step ${event.plan.step} of ${event.plan.total}` : 'Playing…';
   if (backtrack) {
     // Unmix at the destination, then return the original source tile along
     // the exact reverse path. Also restores both tiles after a clearing move.
@@ -1272,6 +1273,8 @@ async function animateSearchEvent(event) {
     return false;
   }
   state.tiles = [...(backtrack ? event.before : event.after)];
+  autoPlayState.message = backtrack ? 'Planning from the restored position…' :
+    event.plan ? `${event.plan.description} — step ${event.plan.step} of ${event.plan.total}` : 'Playing…';
   if (backtrack) {
     state.history.pop();
     undoCount += 1;
@@ -1283,58 +1286,228 @@ async function animateSearchEvent(event) {
   return true;
 }
 
+// Plan one future batch in a separate thread while the approved batch plays.
+// The worker receives the predicted board/history and never touches live tiles.
+function createAutoPlayPrefetch(tiles, adjacency, history) {
+  if (typeof Worker === 'undefined') return null;
+  const options = {strategyOnly: true, batchGroups: 6, history};
+  const source = `const SplashSearch = (${createSplashSearch.toString()})();
+    onmessage = ({data}) => {
+      const search = SplashSearch.solve(data.tiles, data.adjacency, data.options);
+      let lastProgress = 0;
+      try {
+        for (;;) {
+          const step = search.next();
+          if (step.done) { postMessage({kind:'done', result:step.value}); break; }
+          const event = step.value;
+          if (event.type === 'batch-ready') {
+            const events = [event];
+            for (let i=0; i<event.moveCount; i++) events.push(search.next().value);
+            postMessage({kind:'batch', events}); break;
+          }
+          if (event.type !== 'search' || Date.now()-lastProgress >= 100) {
+            postMessage({kind:'event', event}); lastProgress=Date.now();
+          }
+        }
+      } catch (error) { postMessage({kind:'error', message:String(error)}); }
+      finally { search.return(); close(); }
+    };`;
+  let worker, url;
+  try {
+    url = URL.createObjectURL(new Blob([source], {type:'text/javascript'}));
+    worker = new Worker(url);
+  } catch (error) {
+    if (url) URL.revokeObjectURL(url);
+    return null;
+  }
+  const queue = [];
+  let closed = false, pending = null, fallback = null, endpoint = null;
+  function finishWorker() { worker.terminate(); URL.revokeObjectURL(url); }
+  function deliver() {
+    if (pending && queue.length) { const resolve=pending; pending=null; resolve(queue.shift()); }
+  }
+  function fail() {
+    finishWorker();
+    // If workers are unavailable in this browser, resume the same strategic
+    // search cooperatively when its batch is requested.
+    fallback = SplashSearch.solve(tiles, adjacency, options);
+    if (pending) { const resolve=pending; pending=null; resolve(fallback.next()); }
+  }
+  worker.onmessage = ({data}) => {
+    if (closed) return;
+    if (data.kind === 'error') { fail(); return; }
+    if (data.kind === 'batch') {
+      endpoint=data.events[0];
+      queue.push(...data.events.map(value=>({done:false,value})));
+      finishWorker();
+    } else if (data.kind === 'done') {
+      queue.push({done:true,value:data.result}); finishWorker();
+    } else {
+      const step={done:false,value:data.event};
+      if (data.event.type==='search' && queue.at(-1)?.value?.type==='search') queue[queue.length-1]=step;
+      else queue.push(step);
+    }
+    deliver();
+  };
+  worker.onerror = event => { event.preventDefault(); if (!closed) fail(); };
+  const cancellation = window.setInterval(()=>{
+    if (autoPlayInterrupted()) controller.return();
+  },50);
+  const controller = {
+    get hasReadyBatch() { return queue.some(s=>s.value?.type==='batch-ready'); },
+    get closed() { return closed; },
+    next() {
+      if (closed) return Promise.resolve({done:true,value:'unknown'});
+      if (queue.length) return Promise.resolve(queue.shift());
+      if (!fallback && endpoint) {
+        if (endpoint.complete) return Promise.resolve({done:true,value:'solved'});
+        fallback=SplashSearch.solve(endpoint.after,adjacency,{...options,history:endpoint.history});
+      }
+      if (fallback) return Promise.resolve(fallback.next());
+      return new Promise(resolve=>{pending=resolve;});
+    },
+    return() {
+      if (closed) return;
+      closed=true;finishWorker();window.clearInterval(cancellation);fallback?.return();queue.length=0;
+      if (pending) { const resolve=pending;pending=null;resolve({done:true,value:'unknown'}); }
+    }
+  };
+  worker.postMessage({tiles,adjacency,options});
+  return controller;
+}
+
 async function runAutoPlay() {
   autoPlayState.active = true;
   autoPlayState.stopRequested = false;
-  autoPlayState.session = {startedAt: performance.now(), endedAt: null, solved: 0, unsolvable: 0, unknown: 0};
-  autoPlayState.message = 'Searching…';
-  resetBoardTimer();
+  const now = performance.now();
+  if (!autoPlayState.session) {
+    autoPlayState.session = {startedAt: now, endedAt: null, solved: 0, unsolvable: 0, unknown: 0};
+  } else if (autoPlayState.session.endedAt !== null) {
+    // Resume the same session without counting time spent stopped.
+    autoPlayState.session.startedAt += now - autoPlayState.session.endedAt;
+    autoPlayState.session.endedAt = null;
+  }
+  autoPlayState.message = 'Planning clearances…';
+  // The main timer follows the session during Auto Play, even if a manual
+  // New Board reset its display while Auto Play was stopped.
+  stopBoardTimer();
+  boardTimerElapsedMs = now - autoPlayState.session.startedAt;
+  startBoardTimerIfNeeded();
   state.dragState = createEmptyDragState();
-  state.history = [];
   undoCount = 0;
   hideMoveError(true);
   const tick = window.setInterval(renderAutoPlaySession, 250);
+  let boardDeadline=performance.now()+AUTO_PLAY_SEARCH_MS;
+  let cancelSearch = null;
   render();
   try {
     while (!autoPlayState.stopRequested) {
       autoPlayState.phase = 'search';
-      autoPlayState.deadline = performance.now() + AUTO_PLAY_SEARCH_MS;
-      autoPlayState.message = 'Searching…';
+      autoPlayState.deadline = boardDeadline;
+      autoPlayState.message = 'Planning clearances…';
       startBoardTimerIfNeeded();
-      const search = SplashSearch.solve([...state.tiles], tilesMeta.map(tile => getNeighbors(tile.index)));
+      const adjacency = tilesMeta.map(tile => getNeighbors(tile.index));
+      let search = SplashSearch.solve([...state.tiles], adjacency, {history: state.history, strategyOnly: true, batchGroups: 6});
+      let prefetch = null, batchMovesLeft = 0;
+      cancelSearch = () => { search.return(); prefetch?.return(); };
       let result = 'unknown';
+      let nextPlanningStatus = 0;
       while (!autoPlayInterrupted()) {
-        const step = search.next();
+        const step = await search.next();
         if (autoPlayInterrupted()) break;
         if (step.done) { result = step.value; break; }
+        if (step.value.type === 'batch-ready') {
+          if (!step.value.complete && Array.isArray(step.value.after)) {
+            prefetch?.return();
+            prefetch = createAutoPlayPrefetch(step.value.after, adjacency, step.value.history);
+            batchMovesLeft = prefetch ? step.value.moveCount : 0;
+          }
+          autoPlayState.message = step.value.message;
+          renderAutoPlaySession();
+          if (!step.value.complete && !await pauseAutoPlay(1500)) break;
+          nextPlanningStatus = performance.now() + 1500;
+          continue;
+        }
+        if (step.value.type === 'exhaustive-required') {
+          autoPlayState.message = step.value.message;
+          result = 'paused';
+          break;
+        }
         if (step.value.type === 'search') {
+          // The preceding animation may have been an undo. Silent proof
+          // can take a long time, so replace its stale Backtracking label
+          // and expose real progress rather than leaving a frozen display.
+          const objective = step.value.objective;
+          const label = step.value.phase === 'funding'
+            ? `Checking ${objective?.color || 'bridge'} supplies`
+            : step.value.phase === 'planning'
+            ? objective ? `Planning clearance of ${objective.color} group` : 'Planning clearances'
+            : step.value.phase === 'endgame-check' ? 'Checking the small remaining board'
+            : step.value.phase === 'batch-check' ? 'Checking the board after planned clearances'
+            : step.value.phase === 'exploration' ? 'Checking promising moves' : 'Checking a complete continuation';
+          const progress = Number.isSafeInteger(step.value.positions)
+            ? ` ${step.value.positions.toLocaleString()} search checks (including repeats).` : '';
+          if (performance.now() >= nextPlanningStatus) {
+            autoPlayState.message = step.value.message ? `${step.value.message}${progress}` : `${label}…${progress}`;
+            nextPlanningStatus = performance.now() + 1500;
+            renderAutoPlaySession();
+          }
           // Silent lookahead does not touch tiles, history, or animation.
           // Yield to the browser so Stop and the time limit stay responsive.
           await waitForAutoPlayMs(0);
           continue;
         }
+        if (!state.tiles.every((c,i)=>c===(step.value.type==='backtrack'?step.value.after:step.value.before)[i])) {
+          throw new Error('Auto Play plan does not match the displayed board');
+        }
         if (!await animateSearchEvent(step.value)) break;
+        if (prefetch && --batchMovesLeft === 0) {
+          search.return();search=prefetch;prefetch=null;
+        }
+        nextPlanningStatus = 0;
         // Recognize the final clearing immediately, without consuming an
         // unnecessary inter-move pause from the board's search budget.
         if (isBoardCleared(state.tiles)) { result = 'solved'; break; }
         if (!await pauseAutoPlay(500)) break;
       }
       search.return();
+      prefetch?.return();
       if (autoPlayState.stopRequested) break;
+      if (result === 'paused') {
+        // Preserve the diagnostic position and history for manual inspection.
+        // This is neither a timeout nor an impossibility proof.
+        autoPlayState.phase = 'result';
+        break;
+      }
+      // A failed edited position or incomplete history does not prove the
+      // original deal impossible. Search that deal before counting a proof.
+      if(result==='unsolvable' && !state.tiles.every((c,i)=>c===state.initialTiles[i])) {
+        state.tiles=[...state.initialTiles];state.history=[];
+        state.dragState=createEmptyDragState();render();
+        continue;
+      }
       autoPlayState.phase = 'result';
       autoPlayState.session[result] += 1;
       autoPlayState.message = result === 'solved' ? 'Solution found!' :
-        result === 'unsolvable' ? 'Board is unsolvable!' : 'Solution Unknown';
-      stopBoardTimer();
+        result === 'unsolvable' ? 'Board is unsolvable!' : 'Timed out';
+      if (result !== 'solved') {
+        // Restore the original deal, undoing even manual moves made before
+        // Auto Play, and return control to the player.
+        state.tiles = [...state.initialTiles];
+        state.history = [];
+        state.dragState = createEmptyDragState();
+        undoCount = 0;
+        break;
+      }
       render();
-      if (!await pauseAutoPlay(result === 'unknown' ? AUTO_PLAY_UNKNOWN_MS : AUTO_PLAY_RESULT_MS)) break;
+      if (!await pauseAutoPlay(AUTO_PLAY_RESULT_MS)) break;
       const fresh = createShuffledBoard();
+      boardDeadline=performance.now()+AUTO_PLAY_SEARCH_MS;
       state.tiles = fresh;
       state.initialTiles = [...fresh];
       state.history = [];
       state.dragState = createEmptyDragState();
       undoCount = 0;
-      resetBoardTimer();
       updateNoLegalMovesState();
       render();
     }
@@ -1342,6 +1515,7 @@ async function runAutoPlay() {
     console.error('Auto Play search failed', error);
     autoPlayState.message = 'Auto Play stopped because of an error.';
   } finally {
+    cancelSearch?.();
     window.clearInterval(tick);
     autoPlayState.session.endedAt = performance.now();
     if (autoPlayState.stopRequested) autoPlayState.message = 'Auto Play stopped.';
@@ -2052,8 +2226,8 @@ function applyMove(sourceIndex, targetIndex, gameState) {
 
 function updateNoLegalMovesState() {
   noLegalMovesLeft = !hasAnyLegalMoves(state.tiles);
-  // A dead branch is still part of the current timed search.
-  if (autoPlayState.active && autoPlayState.phase === 'search') return;
+  // Dead branches and the wait between boards are part of the same session.
+  if (autoPlayState.active) return;
 
   const timerHasStarted = boardTimerStartMs !== null || boardTimerElapsedMs > 0;
   if (!timerHasStarted) return;
@@ -4910,9 +5084,18 @@ function formatElapsedTimer(elapsedMs) {
 /**
  * @returns {boolean}
  */
+function isLocalSplash() {
+  return window.location.protocol === 'file:' ||
+    ['localhost','127.0.0.1','[::1]'].includes(window.location.hostname);
+}
+
+function isAutoPlayAvailable() {
+  return appState.playVariant === 'standard' || isLocalSplash();
+}
+
 function readAnalysisUnlocked() {
   try {
-    if (window.location.protocol === 'file:') return true;
+    if (isLocalSplash()) return true;
     const path = window.location.pathname || '';
     if (path.endsWith('/Analysis') || path.endsWith('/Analysis/')) {
       return true;
@@ -4955,7 +5138,7 @@ function updateClearBoardButtonState() {
     const regularPlayActive =
       appState.mode === 'play' &&
       appState.screen === 'game' &&
-      appState.playVariant === 'standard';
+      isAutoPlayAvailable();
     autoPlayBtn.textContent = autoPlayState.active ? 'Stop' : 'Auto Play';
     autoPlayBtn.disabled = !regularPlayActive;
   }
