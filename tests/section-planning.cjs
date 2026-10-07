@@ -20,7 +20,7 @@ if(require.main===module){
  for(const bits of [[1,2,4],[1,4,2],[2,1,4],[2,4,1],[4,1,2],[4,2,1]]){
   const permute=c=>[1,2,4].reduce((n,bit,i)=>n|(c&bit?bits[i]:0),0);
   const tiles=board.map(c=>names[permute(names.indexOf(c))]),snapshot=tiles.slice();
-  const g=fresh().solve(tiles,adj,{strategyOnly:true,batchGroups:6,sectionEndgameStates:0});
+  const g=fresh().solve(tiles,adj,{strategyOnly:true,batchGroups:6,sectionRestarts:0,sectionEndgameStates:0});
   let s,current=tiles.map(c=>names.indexOf(c)),moves=0,last,comparisons=0,batches=0;const start=Date.now();
   while(!(s=g.next()).done){const e=s.value;
    assert(Date.now()-start<15000,'Challenge must complete within 15 seconds');
@@ -43,7 +43,7 @@ if(require.main===module){
  // Explicit 30-cell fixture, including its last red/blue pair.
  const branchTiles=[...branching,'R','B'].map(c=>({R:'red',B:'blue',Y:'yellow'}[c]));
  branchTiles.push(...Array(30).fill('white'));
- const branchOptions={sectionEndgameStates:0,sectionStates:20000,strategyStates:20000,localStates:0,layoutLimit:0,stopBeforeExhaustive:true};
+ const branchOptions={sectionRestarts:0,sectionEndgameStates:0,sectionStates:20000,strategyStates:20000,localStates:0,layoutLimit:0,stopBeforeExhaustive:true};
  let narrow=fresh().solve(branchTiles,adj,{...branchOptions,sectionWidth:1}),branchStep;
  while(!(branchStep=narrow.next()).done)assert.notEqual(branchStep.value.type,'forward');
  assert.equal(branchStep.value,'paused');

@@ -393,3 +393,18 @@ verified section endgame is cached for Stop/resume. Zero states disables it.
 moves, including its two-green bridge and resumed playback. Run the UI check
 with `SECTION_FIXTURE=./section-endgame.cjs node tests/section-browser.cjs`.
 The prior width regressions disable endgame completion to keep testing widening.
+
+
+October 7 ranking diversity: after the original narrow section pass stalls,
+Auto Play tries up to 16 narrow passes with reproducible, seeded score variations
+before widening the frontier. Later strategic passes use new seeds as well.
+The perturbation affects candidate ranking only; structural checks, proof budgets,
+and full legal revalidation still determine whether a solution can play.
+`sectionRestarts: 0` disables these retries. Every pass yields for Stop/deadlines.
+
+`node tests/section-diversity.cjs` reconstructs Ryan's 60-tile board, verifies
+40 legal moves with default Auto Play options, repeats from a fresh solver to
+check identical results, and tests cancellation, disabled retries, and unknown
+budget results. The earlier width and bridge fixtures disable ranking restarts
+to isolate their original regressions. Test UI playback with
+`SECTION_FIXTURE=./section-diversity.cjs node tests/section-browser.cjs`.

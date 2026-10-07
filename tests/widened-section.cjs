@@ -10,7 +10,7 @@ if(require.main===module){
  const names=['white','red','blue','purple','yellow','orange','green'];
  function blob(b,i){const q=[i],seen=new Set(q);for(const x of q)for(const y of adj[x])if(b[y]===b[i]&&!seen.has(y)){seen.add(y);q.push(y);}return q;}
  const original=board.slice(),start=Date.now(),widths=new Set();
- const g=fresh()(board,adj,{strategyOnly:true,batchGroups:6,sectionEndgameStates:0});
+ const g=fresh()(board,adj,{strategyOnly:true,batchGroups:6,sectionRestarts:0,sectionEndgameStates:0});
  let s,current=board.map(c=>names.indexOf(c)),moves=0,batches=0;
  while(!(s=g.next()).done){
   const e=s.value;assert(Date.now()-start<60000,'Default planning should solve within 60 seconds');
@@ -28,7 +28,7 @@ if(require.main===module){
  }
  assert.equal(s.value,'solved');assert(current.every(c=>!c));assert.equal(moves,40);assert.equal(batches,1);
  assert(widths.has(16)&&widths.has(32));assert.deepEqual(board,original);
- const cancel=fresh()(board,adj,{strategyOnly:true,batchGroups:6,sectionEndgameStates:0});
+ const cancel=fresh()(board,adj,{strategyOnly:true,batchGroups:6,sectionRestarts:0,sectionEndgameStates:0});
  do{s=cancel.next();assert(!s.done);assert.equal(s.value.type,'search');}while(s.value.sectionWidth!==16);
  cancel.return();assert.deepEqual(board,original);
  const disabled=fresh()(board,adj,{strategyOnly:true,sectionStates:0,strategyStates:1,localStates:0,layoutLimit:0});

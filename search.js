@@ -723,12 +723,12 @@ function createSplashSearch() {
   // Verified mode waits for a complete continuation. Progressive mode bounds
   // the planning pass, then emits legal attempts and exact failed-branch undos.
   function* solve(tiles, adjacency, {
-    strategyStates=120000, sectionStates=120000, sectionWidth=8, sectionEndgameTiles=18, sectionEndgameStates=65536, localStates=1536, planVariants=24, layoutLimit=192, bridgeStates=16384,
+    strategyStates=120000, sectionStates=120000, sectionWidth=8, sectionRestarts=16, sectionEndgameTiles=18, sectionEndgameStates=65536, localStates=1536, planVariants=24, layoutLimit=192, bridgeStates=16384,
     history=[], lookaheadStates, endgameTiles, progressive=false, stopBeforeExhaustive=false, strategyOnly=false, batchGroups=0, proofTiles=20, proofStates=16384
   } = {}) {
     // Accept the old options for saved integrations; they no longer authorize
     // speculative playback or change the meaning of an unresolved position.
-    for(const [key,value] of Object.entries({strategyStates,sectionStates,sectionWidth,sectionEndgameTiles,sectionEndgameStates,localStates,planVariants,layoutLimit,bridgeStates,lookaheadStates,endgameTiles,batchGroups,proofTiles,proofStates}))
+    for(const [key,value] of Object.entries({strategyStates,sectionStates,sectionWidth,sectionRestarts,sectionEndgameTiles,sectionEndgameStates,localStates,planVariants,layoutLimit,bridgeStates,lookaheadStates,endgameTiles,batchGroups,proofTiles,proofStates}))
       if(value!==undefined && (!Number.isSafeInteger(value)||value<0))throw new RangeError(`${key} must be a nonnegative safe integer`);
     const graphKey=JSON.stringify(adjacency);
     if(continuation?.graph===graphKey&&(!strategyOnly||continuation.strategic)){
@@ -915,7 +915,7 @@ function createSplashSearch() {
     // Compare complete small clearances across a bounded frontier before the
     // expensive layout planner. Every edge removes a whole color-balanced job;
     // intermediate bridge contacts and the resulting remainder are checked.
-    function* sectionPlans(b, budget, width=8) {
+    function* sectionPlans(b, budget, width=8, seed=0) {
       const rank=current=>{
         const bs=blobs(current,adjacency),components=parts(current);
         let score=0;
@@ -928,13 +928,24 @@ function createSplashSearch() {
           const degree=adjacency[i].filter(j=>current[j]).length;
           score+=degree*2-(degree<=1?12:0);
         }
-        return score-components.length*20;
+        // Stable, seeded variation avoids repeating the same greedy branch.
+        // It affects ranking only; legality and complete proofs remain required.
+        let variation=0;
+        if(seed){
+          let hash=(2166136261^seed)>>>0;
+          for(const color of current)hash=Math.imul(hash^color,16777619)>>>0;
+          hash=Math.imul(hash^(hash>>>16),2246822507)>>>0;
+          hash=Math.imul(hash^(hash>>>13),3266489909)>>>0;
+          hash=(hash^(hash>>>16))>>>0;
+          variation=(hash/4294967296-0.5)*100;
+        }
+        return score-components.length*20+variation;
       };
       let frontier=[{board:b,plans:[],score:rank(b)}];
       const visited=new Set([keyOf(b)]);
       while(frontier.length&&budget.left>0){
-        yield {...checkpoint('planning'),sectionWidth:width,
-          message:`Comparing section clearances: ${frontier.length} candidate continuations.`};
+        yield {...checkpoint('planning'),sectionWidth:width,sectionSeed:seed,
+          message:`Comparing section clearances${seed?` with ranking ${seed}`:''}: ${frontier.length} candidate continuations.`};
         const candidates=new Map();
         for(const node of frontier){
           const current=node.board,bs=blobs(current,adjacency);
@@ -1148,6 +1159,10 @@ function createSplashSearch() {
         let nextSectionStates=Math.min(sectionStates,strategyStates);
         if(canPlanSections){
           plans=yield* sectionPlans(root,{left:nextSectionStates},1);
+          // Cheap narrow restarts explore different preferences before paying
+          // for a wider frontier of similarly ranked residual boards.
+          for(let seed=1;plans===null&&strategyOnly&&seed<=sectionRestarts;seed++)
+            plans=yield* sectionPlans(root,{left:nextSectionStates},1,seed);
           if(plans===null&&sectionWidth>1)
             plans=yield* sectionPlans(root,{left:nextSectionStates},nextSectionWidth);
           // Keep the first retries bounded; later strategic passes continue
@@ -1177,6 +1192,8 @@ function createSplashSearch() {
             nextSectionWidth=Math.min(Number.MAX_SAFE_INTEGER,nextSectionWidth*2);
             nextSectionStates=Math.min(Number.MAX_SAFE_INTEGER,nextSectionStates*2);
             plans=yield* sectionPlans(root,{left:nextSectionStates},nextSectionWidth);
+            for(let seed=1;plans===null&&seed<=sectionRestarts;seed++)
+              plans=yield* sectionPlans(root,{left:nextSectionStates},1,seed+strategyPass*sectionRestarts);
           }
           if(plans===null)plans=yield* strategic(root,{left:nextStrategyStates},new Set());
         }
