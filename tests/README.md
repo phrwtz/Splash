@@ -40,7 +40,7 @@ node tests/browser.cjs
 ```
 
 The browser checks require Playwright and its Chromium browser. They use a
-separate headless browser with a controlled clock to verify the thirty-minute
+separate headless browser with a controlled clock to verify the five-minute
 limit, two-second solved-result waits, original-board restoration, session continuity, legal moves,
 backtracking, actual forward/reverse animation, and cancellation. They do not
 modify the game or save session counters. `PLAYWRIGHT_PATH` can point to an
@@ -54,7 +54,7 @@ move history, and stop immediately for manual play. The outcome remains visible.
 Both timers include solved-result waits; result counts accumulate.
 Stop freezes session time, and starting Auto Play again resumes its elapsed
 time and counts, including after manually selecting New Board. Each board
-still receives a fresh thirty-minute search deadline. Switching between Analysis
+still receives a fresh five-minute search deadline. Switching between Analysis
 and Game preserves the session and its accumulated counts.
 Session state lives in memory, so terminating or reloading Splash also clears
 it. Clock-controlled tests cover these transitions.

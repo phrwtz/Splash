@@ -1280,7 +1280,7 @@ function updateDemoControls() {
 }
 
 
-const AUTO_PLAY_SEARCH_MS = 30 * 60 * 1000;
+const AUTO_PLAY_SEARCH_MS = 5 * 60 * 1000;
 const AUTO_PLAY_RESULT_MS = 2 * 1000;
 
 function renderAutoPlaySession() {

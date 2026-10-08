@@ -13,7 +13,11 @@ const {chromium}=require(process.env.PLAYWRIGHT_PATH||'playwright'),assert=requi
   createShuffledBoard=()=>{freshBoards++;return deal.map((c,i)=>deal[(i+1)%60]);};render();
  });
  await p.getByRole('button',{name:'Auto Play',exact:true}).click();
- await p.clock.fastForward(1800001);await p.clock.runFor(100);
+ assert.equal(await p.evaluate(()=>AUTO_PLAY_SEARCH_MS),300000);
+ await p.clock.fastForward(299000);
+ assert.equal(await p.evaluate(()=>savedTimedOutBoards.length),0);
+ assert.equal(await p.locator('#auto-play-unknown').textContent(),'0');
+ await p.clock.fastForward(1001);await p.clock.runFor(100);
  assert.equal(await p.evaluate(()=>savedTimedOutBoards.length),1);
  assert.deepEqual(await p.evaluate(()=>savedTimedOutBoards[0].tiles),await p.evaluate(()=>deal));
  assert.equal(await p.locator('#auto-play-unknown').textContent(),'1');
