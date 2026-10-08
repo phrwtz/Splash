@@ -408,3 +408,12 @@ check identical results, and tests cancellation, disabled retries, and unknown
 budget results. The earlier width and bridge fixtures disable ranking restarts
 to isolate their original regressions. Test UI playback with
 `SECTION_FIXTURE=./section-diversity.cjs node tests/section-browser.cjs`.
+
+
+Timeout library: unknown results now save the original deal in browser local
+storage and advance to a new board after the result pause. Stop does not save a
+timeout; proved-unsolvable boards retain their existing halt behavior. The
+Timed-out boards dialog reopens any saved deal for manual play, stopping Auto
+Play first. Storage failures retain the board in memory and show a session-only
+warning. Run `node tests/timeouts-browser.cjs` with the existing Playwright
+variables for continuation, persistence, replay, Stop, and storage failure checks.

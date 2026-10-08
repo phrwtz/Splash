@@ -180,6 +180,66 @@ const state = {
   history: []
 };
 state.initialTiles = [...state.tiles];
+const SAVED_TIMEOUTS_KEY = 'splash.timedOutBoards.v1';
+let savedTimeoutStorageWarning = '';
+let savedTimedOutBoards = readSavedTimedOutBoards();
+
+function readSavedTimedOutBoards() {
+  try {
+    const entries = JSON.parse(localStorage.getItem(SAVED_TIMEOUTS_KEY) || '[]');
+    if (!Array.isArray(entries)) throw new Error('Invalid saved board list');
+    return entries.filter(entry => entry && Number.isFinite(entry.savedAt) &&
+      Array.isArray(entry.tiles) && entry.tiles.length === state.tiles.length &&
+      entry.tiles.every(color => ['white','red','blue','yellow','purple','orange','green'].includes(color)));
+  } catch (error) {
+    savedTimeoutStorageWarning = 'Saved boards could not be read. New boards will remain available during this visit.';
+    return [];
+  }
+}
+
+function saveTimedOutBoard() {
+  // Store the original deal, including cells cleared before Auto Play started.
+  savedTimedOutBoards.unshift({savedAt: Date.now(), tiles: [...state.initialTiles]});
+  try {
+    localStorage.setItem(SAVED_TIMEOUTS_KEY, JSON.stringify(savedTimedOutBoards));
+    savedTimeoutStorageWarning = '';
+  } catch (error) {
+    savedTimeoutStorageWarning = 'Browser storage is unavailable or full. Newly saved boards are available during this visit only.';
+  }
+  renderSavedTimedOutBoards();
+}
+
+function renderSavedTimedOutBoards() {
+  const button = document.getElementById('saved-timeouts-btn');
+  if (button) button.textContent = `Timed-out boards (${savedTimedOutBoards.length})`;
+  const dialog = document.getElementById('saved-timeouts-dialog');
+  if (!dialog?.open) return;
+  document.getElementById('saved-timeouts-storage').textContent = savedTimeoutStorageWarning ||
+    'Saved in this browser, including after you close the page.';
+  const list = document.getElementById('saved-timeouts-list');
+  list.replaceChildren();
+  if (!savedTimedOutBoards.length) {
+    const empty = document.createElement('p'); empty.textContent = 'No timed-out boards saved yet.'; list.append(empty);
+  }
+  savedTimedOutBoards.forEach((entry, index) => {
+    const row = document.createElement('div'); row.className = 'saved-timeout-row';
+    const label = document.createElement('span');
+    label.textContent = `Board ${savedTimedOutBoards.length-index} — ${new Date(entry.savedAt).toLocaleString()}`;
+    const open = document.createElement('button'); open.type = 'button'; open.textContent = 'Play this board';
+    open.addEventListener('click', async () => {
+      open.disabled = true;
+      autoPlayState.stopRequested = true; resolveAutoPlayStep(false);
+      while (autoPlayState.active) await new Promise(resolve => window.setTimeout(resolve, 25));
+      autoPlayState.stopRequested = false;
+      state.tiles = [...entry.tiles]; state.initialTiles = [...entry.tiles]; state.history = [];
+      state.dragState = createEmptyDragState(); undoCount = 0;
+      resetBoardTimer(); hideMoveError(true); updateNoLegalMovesState();
+      dialog.close(); render();
+    });
+    row.append(label, open); list.append(row);
+  });
+}
+
 let landingTiles = createShuffledBoard();
 
 const appState = {
@@ -473,6 +533,11 @@ newBoardBtn?.addEventListener('click', () => {
   render();
 });
 
+document.getElementById('saved-timeouts-btn')?.addEventListener('click', () => {
+  document.getElementById('saved-timeouts-dialog').showModal();
+  renderSavedTimedOutBoards();
+});
+
 autoPlayBtn?.addEventListener('click', () => {
   if (
     appState.mode !== 'play' ||
@@ -763,6 +828,7 @@ function updatePlayVariantUi() {
   analysisPalette?.classList.toggle('hidden', !inGamePlayView);
   analysisGraphWrap?.classList.toggle('hidden', !inGamePlayView);
   autoPlayBtn?.classList.toggle('hidden', !inRegularPlayView);
+  document.getElementById('saved-timeouts-btn')?.classList.toggle('hidden', !inRegularPlayView);
   clearBoardBtn?.classList.toggle('hidden', appState.playVariant !== 'analysis');
   if (!inGamePlayView) {
     clearAnalysisMixFeedback();
@@ -1490,14 +1556,18 @@ async function runAutoPlay() {
       autoPlayState.session[result] += 1;
       autoPlayState.message = result === 'solved' ? 'Solution found!' :
         result === 'unsolvable' ? 'Board is unsolvable!' : 'Timed out';
+      if (result === 'unknown') {
+        saveTimedOutBoard();
+        autoPlayState.message = 'Timed out — board saved. Continuing with a new board.';
+      }
       if (result !== 'solved') {
         // Restore the original deal, undoing even manual moves made before
-        // Auto Play, and return control to the player.
+        // Auto Play, before halting on a proof or advancing after a timeout.
         state.tiles = [...state.initialTiles];
         state.history = [];
         state.dragState = createEmptyDragState();
         undoCount = 0;
-        break;
+        if (result === 'unsolvable') break;
       }
       render();
       if (!await pauseAutoPlay(AUTO_PLAY_RESULT_MS)) break;
@@ -5134,6 +5204,8 @@ function updateClearBoardButtonState() {
   for (const button of [resetBtn, newBoardBtn, analysisBtn, playDemoBtn]) {
     if (button) button.disabled = autoPlayState.active;
   }
+  const savedButton = document.getElementById('saved-timeouts-btn');
+  if (savedButton) savedButton.textContent = `Timed-out boards (${savedTimedOutBoards.length})`;
   if (autoPlayBtn) {
     const regularPlayActive =
       appState.mode === 'play' &&

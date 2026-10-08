@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Splash</title>
-    <link rel="stylesheet" href="styles.css?v=1742eb11ad5f" />
+    <link rel="stylesheet" href="styles.css?v=acc24d2e7b1d" />
   </head>
   <body>
     <main class="app">
@@ -87,6 +87,7 @@
             <button id="undo-btn" type="button">Undo</button>
             <button id="reset-btn" type="button">Reset</button>
             <button id="new-board-btn" type="button">New Board</button>
+            <button id="saved-timeouts-btn" class="hidden" type="button">Timed-out boards</button>
             <button id="auto-play-btn" class="hidden" type="button">Auto Play</button>
             <button id="clear-board-btn" class="hidden" type="button">Clear Board</button>
             <p id="analysis-mix-feedback" class="analysis-mix-feedback hidden" role="status" aria-live="polite"></p>
@@ -137,7 +138,14 @@
       </section>
     </main>
 
+    <dialog id="saved-timeouts-dialog" aria-labelledby="saved-timeouts-title">
+      <h2 id="saved-timeouts-title">Timed-out boards</h2>
+      <p>Open a board to try solving it yourself. Opening one stops Auto Play.</p>
+      <p id="saved-timeouts-storage" role="status"></p>
+      <div id="saved-timeouts-list"></div>
+      <form method="dialog"><button type="submit">Close</button></form>
+    </dialog>
     <script src="search.js?v=25c01da7fb5c"></script>
-    <script src="app.js?v=2d541cd7e12e"></script>
+    <script src="app.js?v=74f8c911b93a"></script>
   </body>
 </html>

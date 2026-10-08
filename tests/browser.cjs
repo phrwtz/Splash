@@ -84,6 +84,7 @@ const fixture=require('./fixtures.json').backtrack;
   await page.evaluate(()=>{SplashSearch.solve=function*(){while(true)yield {type:'search'};};});
   await startFixture(page);await page.clock.fastForward(1800001);await page.clock.runFor(100);
   assert.equal(await page.locator('#auto-play-unknown').textContent(),String(round));
+  await stopIfRunning(page);await page.clock.runFor(100);
  }
  await page.close();
  console.log('Passed Game-only accumulation for real solutions, proofs, and deadlines.');
@@ -106,7 +107,7 @@ const fixture=require('./fixtures.json').backtrack;
  await page.close();
  console.log('Passed cumulative outcome counts and reload reset.');
  // Unsuccessful outcomes restore the original deal, not the search start.
- for(const outcome of ['unsolvable','unknown']) {
+ for(const outcome of ['unsolvable']) {
   page=await setup();
   await page.evaluate(outcome=>{
    window.original=[...state.initialTiles];window.fresh=0;
@@ -440,16 +441,16 @@ const fixture=require('./fixtures.json').backtrack;
  assert.equal(await page.evaluate(()=>autoPlayState.phase),'search');
  assert.equal(await page.locator('#auto-play-unknown').textContent(),'0');
  await page.clock.fastForward(1199900);await page.clock.runFor(100);
- assert.equal(await page.locator('#auto-play-status').textContent(),'Timed out');
+ assert.match(await page.locator('#auto-play-status').textContent(),/^Timed out/);
  assert.equal(await page.locator('#auto-play-unknown').textContent(),'1');assert.equal(await page.locator('#auto-play-unsolvable').textContent(),'0');
  assert.equal(await page.evaluate(()=>fresh),0);
- await page.clock.runFor(4800);assert.equal(await page.evaluate(()=>fresh),0);
- await page.clock.runFor(200);assert.equal(await page.evaluate(()=>fresh),0);
- assert.equal(await page.evaluate(()=>autoPlayState.active),false);
  assert.deepEqual(await page.evaluate(()=>state.tiles),await page.evaluate(()=>state.initialTiles));
  assert.equal(await page.evaluate(()=>state.history.length),0);
+ assert.deepEqual(await page.evaluate(()=>savedTimedOutBoards[0].tiles),await page.evaluate(()=>state.initialTiles));
+ await page.clock.runFor(4800);assert.equal(await page.evaluate(()=>fresh),1);
+ assert.equal(await page.evaluate(()=>autoPlayState.active),true);
  await stopIfRunning(page);await page.clock.runFor(100);await page.close();
- console.log('Passed thirty-minute cutoff, original-board restoration, and automatic halt.');
+ console.log('Passed thirty-minute cutoff, original-board saving, and automatic continuation.');
  // Real endgame proof: no animation, stable tiles/history, and responsive Stop.
  page=await setup();
  await page.evaluate(board=>{
@@ -466,7 +467,7 @@ const fixture=require('./fixtures.json').backtrack;
  assert.equal(await page.evaluate(()=>autoPlayState.active),false);
  await startFixture(page);
  await page.clock.fastForward(1800001);await page.clock.runFor(100);
- assert.equal(await page.locator('#auto-play-status').textContent(),'Timed out');
+ assert.match(await page.locator('#auto-play-status').textContent(),/^Timed out/);
  await stopIfRunning(page);await page.clock.runFor(100);
  await startFixture(page);
  for(let i=0;i<1000;i++) {await page.clock.runFor(100);if(await page.evaluate(()=>autoPlayState.phase==='result'||!autoPlayState.active))break;}
@@ -506,7 +507,7 @@ const fixture=require('./fixtures.json').backtrack;
  await stopIfRunning(page);await page.clock.runFor(50);
  assert.equal(await page.evaluate(()=>autoPlayState.active),false);
  await startFixture(page);await page.clock.fastForward(1800001);await page.clock.runFor(100);
- assert.equal(await page.locator('#auto-play-status').textContent(),'Timed out');
+ assert.match(await page.locator('#auto-play-status').textContent(),/^Timed out/);
  assert.equal(await page.locator('#auto-play-unsolvable').textContent(),'0');
  assert.equal(await page.evaluate(()=>planningMoves),0);
  assert.deepEqual(await page.evaluate(()=>state.tiles),require('./purple-strategy.cjs').board);
@@ -621,7 +622,7 @@ const fixture=require('./fixtures.json').backtrack;
  const stopped=await page.evaluate(()=>state.tiles);
  await page.clock.runFor(1000);assert.deepEqual(await page.evaluate(()=>state.tiles),stopped);
  await page.getByRole('button',{name:'Auto Play',exact:true}).click();await page.clock.fastForward(1800001);await page.clock.runFor(100);
- assert.equal(await page.locator('#auto-play-status').textContent(),'Timed out');
+ assert.match(await page.locator('#auto-play-status').textContent(),/^Timed out/);
  assert.equal(await page.locator('#auto-play-unsolvable').textContent(),'0');
  assert.deepEqual(await page.evaluate(()=>state.tiles),require('./purple-strategy.cjs').board);
  assert.equal(await page.evaluate(()=>state.history.length),0);
@@ -758,7 +759,7 @@ const fixture=require('./fixtures.json').backtrack;
  assert.equal(await page.evaluate(()=>autoPlayState.active),false);
  await startFixture(page);
  await page.clock.fastForward(1800001);await page.clock.runFor(100);
- assert.equal(await page.locator('#auto-play-status').textContent(),'Timed out');
+ assert.match(await page.locator('#auto-play-status').textContent(),/^Timed out/);
  assert.deepEqual(await page.evaluate(()=>state.tiles),await page.evaluate(()=>unchanged));
  await stopIfRunning(page);await page.clock.runFor(100);await page.close();
  console.log('Passed silent lookahead display stability, Stop, and deadline.');
