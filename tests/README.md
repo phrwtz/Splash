@@ -417,3 +417,9 @@ Timed-out boards dialog reopens any saved deal for manual play, stopping Auto
 Play first. Storage failures retain the board in memory and show a session-only
 warning. Run `node tests/timeouts-browser.cjs` with the existing Playwright
 variables for continuation, persistence, replay, Stop, and storage failure checks.
+
+Saved-board actions now require an explicit radio selection. Shared Play this
+board and Clear this board buttons remain disabled without a selection. Clearing
+removes only the selected entry and persists the updated list; opening or
+clearing resets the selection. The timeout browser regression checks multiple
+entries, arriving timeouts, deletion persistence, empty lists, and storage errors.

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Splash</title>
-    <link rel="stylesheet" href="styles.css?v=acc24d2e7b1d" />
+    <link rel="stylesheet" href="styles.css?v=3a39c7ccc838" />
   </head>
   <body>
     <main class="app">
@@ -140,12 +140,16 @@
 
     <dialog id="saved-timeouts-dialog" aria-labelledby="saved-timeouts-title">
       <h2 id="saved-timeouts-title">Timed-out boards</h2>
-      <p>Open a board to try solving it yourself. Opening one stops Auto Play.</p>
+      <p>Select a board, then choose Play this board to try solving it yourself. Playing one stops Auto Play. Clear this board removes it from this list.</p>
       <p id="saved-timeouts-storage" role="status"></p>
       <div id="saved-timeouts-list"></div>
+      <div class="saved-timeout-actions">
+        <button id="saved-timeout-play" type="button" disabled>Play this board</button>
+        <button id="saved-timeout-clear" type="button" disabled>Clear this board</button>
+      </div>
       <form method="dialog"><button type="submit">Close</button></form>
     </dialog>
     <script src="search.js?v=25c01da7fb5c"></script>
-    <script src="app.js?v=9c9ac6be653b"></script>
+    <script src="app.js?v=151e789f84b4"></script>
   </body>
 </html>

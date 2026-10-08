@@ -699,4 +699,7 @@ button:focus-visible {
 
 #saved-timeouts-dialog { max-width: min(640px, 90vw); max-height: 80vh; overflow: auto; padding: 24px; border: 2px solid var(--line); border-radius: 12px; color: var(--ink); background: var(--card); }
 #saved-timeouts-dialog::backdrop { background: rgba(0,0,0,.4); }
-.saved-timeout-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin: 12px 0; }
+.saved-timeout-row { display: flex; align-items: center; gap: 12px; margin: 12px 0; padding: 8px; cursor: pointer; }
+
+.saved-timeout-row:has(input:checked) { background: var(--bg); outline: 2px solid var(--line); border-radius: 6px; }
+.saved-timeout-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }

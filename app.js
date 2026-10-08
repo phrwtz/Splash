@@ -183,6 +183,8 @@ state.initialTiles = [...state.tiles];
 const SAVED_TIMEOUTS_KEY = 'splash.timedOutBoards.v1';
 let savedTimeoutStorageWarning = '';
 let savedTimedOutBoards = readSavedTimedOutBoards();
+let selectedTimedOutBoard = null;
+let loadingTimedOutBoard = false;
 
 function readSavedTimedOutBoards() {
   try {
@@ -222,22 +224,51 @@ function renderSavedTimedOutBoards() {
     const empty = document.createElement('p'); empty.textContent = 'No timed-out boards saved yet.'; list.append(empty);
   }
   savedTimedOutBoards.forEach((entry, index) => {
-    const row = document.createElement('div'); row.className = 'saved-timeout-row';
+    const row = document.createElement('label'); row.className = 'saved-timeout-row';
+    const radio = document.createElement('input'); radio.type = 'radio'; radio.name = 'saved-timeout-selection';
+    radio.checked = entry === selectedTimedOutBoard; radio.disabled = loadingTimedOutBoard;
+    radio.addEventListener('change', () => { selectedTimedOutBoard = entry; updateSavedBoardActions(); });
     const label = document.createElement('span');
     label.textContent = `Board ${savedTimedOutBoards.length-index} — ${new Date(entry.savedAt).toLocaleString()}`;
-    const open = document.createElement('button'); open.type = 'button'; open.textContent = 'Play this board';
-    open.addEventListener('click', async () => {
-      open.disabled = true;
-      autoPlayState.stopRequested = true; resolveAutoPlayStep(false);
-      while (autoPlayState.active) await new Promise(resolve => window.setTimeout(resolve, 25));
-      autoPlayState.stopRequested = false;
-      state.tiles = [...entry.tiles]; state.initialTiles = [...entry.tiles]; state.history = [];
-      state.dragState = createEmptyDragState(); undoCount = 0;
-      resetBoardTimer(); hideMoveError(true); updateNoLegalMovesState();
-      dialog.close(); render();
-    });
-    row.append(label, open); list.append(row);
+    row.append(radio, label); list.append(row);
   });
+  updateSavedBoardActions();
+}
+
+function updateSavedBoardActions() {
+  const disabled = loadingTimedOutBoard || !savedTimedOutBoards.includes(selectedTimedOutBoard);
+  document.getElementById('saved-timeout-play').disabled = disabled;
+  document.getElementById('saved-timeout-clear').disabled = disabled;
+}
+
+async function playSelectedTimedOutBoard() {
+  const entry = selectedTimedOutBoard;
+  if (loadingTimedOutBoard || !savedTimedOutBoards.includes(entry)) return;
+  loadingTimedOutBoard = true; renderSavedTimedOutBoards();
+  try {
+    autoPlayState.stopRequested = true; resolveAutoPlayStep(false);
+    while (autoPlayState.active) await new Promise(resolve => window.setTimeout(resolve, 25));
+    autoPlayState.stopRequested = false;
+    state.tiles = [...entry.tiles]; state.initialTiles = [...entry.tiles]; state.history = [];
+    state.dragState = createEmptyDragState(); undoCount = 0;
+    resetBoardTimer(); hideMoveError(true); updateNoLegalMovesState();
+    document.getElementById('saved-timeouts-dialog').close(); render();
+  } finally {
+    loadingTimedOutBoard = false; updateSavedBoardActions();
+  }
+}
+
+function clearSelectedTimedOutBoard() {
+  const index = savedTimedOutBoards.indexOf(selectedTimedOutBoard);
+  if (loadingTimedOutBoard || index < 0) return;
+  savedTimedOutBoards.splice(index, 1); selectedTimedOutBoard = null;
+  try {
+    localStorage.setItem(SAVED_TIMEOUTS_KEY, JSON.stringify(savedTimedOutBoards));
+    savedTimeoutStorageWarning = '';
+  } catch (error) {
+    savedTimeoutStorageWarning = 'Cleared for this visit only. Browser storage could not be updated.';
+  }
+  renderSavedTimedOutBoards();
 }
 
 let landingTiles = createShuffledBoard();
@@ -534,9 +565,14 @@ newBoardBtn?.addEventListener('click', () => {
 });
 
 document.getElementById('saved-timeouts-btn')?.addEventListener('click', () => {
+  selectedTimedOutBoard = null;
   document.getElementById('saved-timeouts-dialog').showModal();
   renderSavedTimedOutBoards();
 });
+
+document.getElementById('saved-timeout-play')?.addEventListener('click', () => { void playSelectedTimedOutBoard(); });
+document.getElementById('saved-timeout-clear')?.addEventListener('click', clearSelectedTimedOutBoard);
+document.getElementById('saved-timeouts-dialog')?.addEventListener('close', () => { selectedTimedOutBoard = null; updateSavedBoardActions(); });
 
 autoPlayBtn?.addEventListener('click', () => {
   if (
