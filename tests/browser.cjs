@@ -7,7 +7,7 @@ const fixture=require('./fixtures.json').backtrack;
  const errors=[];
  async function setup(){const page=await browser.newPage();page.on('pageerror',e=>errors.push(e.message));await page.goto(require('node:url').pathToFileURL(require('node:path').join(__dirname,'..','index.html')).href);await page.clock.install();await page.clock.pauseAt(new Date());return page;}
  // Fixtures that replace tiles directly also establish their original board.
- async function startFixture(page){await page.evaluate(()=>{state.initialTiles=[...state.tiles];});await page.getByRole('button',{name:'Auto Play',exact:true}).click();}
+ async function startFixture(page){await page.evaluate(()=>{state.initialTiles=[...state.tiles];});await page.getByRole('button',{name:'Auto Play',exact:true}).click();await page.getByRole('button',{name:'Start Auto Play',exact:true}).click();}
  async function stopIfRunning(page){if(await page.evaluate(()=>autoPlayState.active))await page.getByRole('button',{name:'Stop',exact:true}).click();}
  let page=await setup();
  await page.evaluate(counter=>{
@@ -47,7 +47,7 @@ const fixture=require('./fixtures.json').backtrack;
   animateSearchEvent=async event=>{recoveryTrace.push(event.type);return animate(event);};
   animateAutoPlayMove=async()=>true;render();
  },require('./bottleneck.cjs'));
- await page.getByRole('button',{name:'Auto Play',exact:true}).click();
+ await page.getByRole('button',{name:'Auto Play',exact:true}).click();await page.getByRole('button',{name:'Start Auto Play',exact:true}).click();
  for(let i=0;i<100;i++){await page.clock.runFor(100);if(await page.locator('#auto-play-status').textContent()==='Solution found!')break;}
  assert.equal(await page.locator('#auto-play-status').textContent(),'Solution found!');
  assert.deepEqual(await page.evaluate(()=>recoveryTrace.slice(0,2)),['backtrack','backtrack']);
@@ -62,7 +62,7 @@ const fixture=require('./fixtures.json').backtrack;
   state.tiles=[...board];state.initialTiles=[...board];window.gateAnimations=0;
   animateAutoPlayMove=async()=>{gateAnimations++;return true;};render();
  },require('./single-gate.cjs').board);
- await page.getByRole('button',{name:'Auto Play',exact:true}).click();
+ await page.getByRole('button',{name:'Auto Play',exact:true}).click();await page.getByRole('button',{name:'Start Auto Play',exact:true}).click();
  assert.equal(await page.locator('#auto-play-status').textContent(),'Board is unsolvable!');
  assert.equal(await page.evaluate(()=>gateAnimations),0);
  assert.equal(await page.locator('#auto-play-unsolvable').textContent(),'1');
@@ -117,7 +117,7 @@ const fixture=require('./fixtures.json').backtrack;
    createShuffledBoard=()=>{fresh++;return [...original];};
    SplashSearch.solve=function*(){yield {type:'search'};return outcome;};render();
   },outcome);
-  await page.getByRole('button',{name:'Auto Play',exact:true}).click();await page.clock.runFor(100);
+  await page.getByRole('button',{name:'Auto Play',exact:true}).click();await page.getByRole('button',{name:'Start Auto Play',exact:true}).click();await page.clock.runFor(100);
   assert.equal(await page.locator('#auto-play-status').textContent(),outcome==='unknown'?'Timed out':'Board is unsolvable!');
   assert.equal(await page.evaluate(()=>autoPlayState.active),false);
   assert.deepEqual(await page.evaluate(()=>state.tiles),await page.evaluate(()=>original));
@@ -132,7 +132,7 @@ const fixture=require('./fixtures.json').backtrack;
   assert.equal(await page.locator('#auto-play-'+outcome).textContent(),'1');
   // Restart and mode changes retain the session counters.
   await page.evaluate(()=>{window.savedSession=autoPlayState.session;SplashSearch.solve=function*(){while(true)yield {type:'search'};};});
-  await page.getByRole('button',{name:'Auto Play',exact:true}).click();await page.clock.runFor(20);
+  await page.getByRole('button',{name:'Auto Play',exact:true}).click();await page.getByRole('button',{name:'Start Auto Play',exact:true}).click();await page.clock.runFor(20);
   assert.equal(await page.evaluate(()=>autoPlayState.session===savedSession),true);
   await stopIfRunning(page);await page.clock.runFor(100);
   await page.getByRole('button',{name:'Analysis',exact:true}).click();
@@ -416,7 +416,7 @@ const fixture=require('./fixtures.json').backtrack;
  assert.match(await page.locator('#auto-play-status').textContent(),/^Clear purple group — step 1 of 3$/);
  await stopIfRunning(page);await page.clock.runFor(50);
  assert.equal(await page.evaluate(()=>strategicEvents.length),1);
- await page.getByRole('button',{name:'Auto Play',exact:true}).click();
+ await page.getByRole('button',{name:'Auto Play',exact:true}).click();await page.getByRole('button',{name:'Start Auto Play',exact:true}).click();
  for(let i=0;i<100;i++){
   await page.clock.runFor(50);
   if(await page.locator('#auto-play-status').textContent()==='Solution found!')break;
@@ -621,7 +621,7 @@ const fixture=require('./fixtures.json').backtrack;
  await stopIfRunning(page);await page.clock.runFor(50);
  const stopped=await page.evaluate(()=>state.tiles);
  await page.clock.runFor(1000);assert.deepEqual(await page.evaluate(()=>state.tiles),stopped);
- await page.getByRole('button',{name:'Auto Play',exact:true}).click();await page.clock.fastForward(300001);await page.clock.runFor(100);
+ await page.getByRole('button',{name:'Auto Play',exact:true}).click();await page.getByRole('button',{name:'Start Auto Play',exact:true}).click();await page.clock.fastForward(300001);await page.clock.runFor(100);
  assert.match(await page.locator('#auto-play-status').textContent(),/^Timed out/);
  assert.equal(await page.locator('#auto-play-unsolvable').textContent(),'0');
  assert.deepEqual(await page.evaluate(()=>state.tiles),require('./purple-strategy.cjs').board);

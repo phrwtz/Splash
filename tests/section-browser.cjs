@@ -13,13 +13,13 @@ const {board}=require(process.env.SECTION_FIXTURE||'./section-planning.cjs');
    window.assertLegal=plan=>{if(!isLinkedBlobMove(plan.sourceIndex,plan.targetIndex,state.tiles))throw Error('Illegal planned transfer');};
    render();
   },board);
-  await page.getByRole('button',{name:'Auto Play',exact:true}).click();
+  await page.getByRole('button',{name:'Auto Play',exact:true}).click();await page.getByRole('button',{name:'Start Auto Play',exact:true}).click();
   // Stop while the section pass is yielding; the live board stays untouched.
   await page.clock.runFor(50);
   assert.deepEqual(await page.evaluate(()=>state.tiles),board);
   await page.getByRole('button',{name:'Stop',exact:true}).click();await page.clock.runFor(100);
   assert.equal(await page.evaluate(()=>autoPlayState.active),false);assert.equal(await page.evaluate(()=>trace.length),0);
-  await page.getByRole('button',{name:'Auto Play',exact:true}).click();
+  await page.getByRole('button',{name:'Auto Play',exact:true}).click();await page.getByRole('button',{name:'Start Auto Play',exact:true}).click();
   for(let i=0;i<240&&!(await page.evaluate(()=>state.tiles.every(c=>c==='white')));i++)await page.clock.runFor(500);
   assert(await page.evaluate(()=>state.tiles.every(c=>c==='white')));
   assert.equal(await page.evaluate(()=>trace.length),40);

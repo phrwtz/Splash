@@ -697,8 +697,8 @@ button:focus-visible {
 #auto-play-status { margin: 0 0 6px; font-weight: 700; }
 .auto-play-stats { display: flex; flex-wrap: wrap; gap: 6px 22px; font-variant-numeric: tabular-nums; }
 
-#saved-timeouts-dialog { max-width: min(640px, 90vw); max-height: 80vh; overflow: auto; padding: 24px; border: 2px solid var(--line); border-radius: 12px; color: var(--ink); background: var(--card); }
-#saved-timeouts-dialog::backdrop { background: rgba(0,0,0,.4); }
+#saved-timeouts-dialog, #auto-play-options { max-width: min(640px, 90vw); max-height: 80vh; overflow: auto; padding: 24px; border: 2px solid var(--line); border-radius: 12px; color: var(--ink); background: var(--card); }
+#saved-timeouts-dialog::backdrop, #auto-play-options::backdrop { background: rgba(0,0,0,.4); }
 .saved-timeout-row { display: flex; align-items: center; gap: 12px; margin: 12px 0; padding: 8px; cursor: pointer; }
 
 .saved-timeout-row:has(input:checked) { background: var(--bg); outline: 2px solid var(--line); border-radius: 6px; }

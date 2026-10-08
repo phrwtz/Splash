@@ -357,6 +357,7 @@ const analysisTransferState = {
 
 const autoPlayState = {
   session: null,
+  animate: true,
   phase: 'idle',
   deadline: Infinity,
   message: '',
@@ -587,6 +588,14 @@ autoPlayBtn?.addEventListener('click', () => {
     return;
   }
   if (analysisTransferState.active) return;
+  document.getElementById('auto-play-animation').checked = autoPlayState.animate;
+  document.getElementById('auto-play-options').showModal();
+});
+
+document.getElementById('auto-play-start')?.addEventListener('click', () => {
+  if (autoPlayState.active || !isAutoPlayAvailable() || analysisTransferState.active) return;
+  autoPlayState.animate = document.getElementById('auto-play-animation').checked;
+  document.getElementById('auto-play-options').close();
   void runAutoPlay();
 });
 
@@ -1349,6 +1358,14 @@ async function pauseAutoPlay(ms) {
 }
 
 async function animateSearchEvent(event) {
+  if (!autoPlayState.animate) {
+    if (autoPlayInterrupted()) return false;
+    const backtrack = event.type === 'backtrack';
+    state.tiles = [...(backtrack ? event.before : event.after)];
+    if (backtrack) { state.history.pop(); undoCount += 1; }
+    else state.history.push({tiles: [...event.before]});
+    return true;
+  }
   const sourceBlob = computeBlobKeyFromTile(event.sourceIndex, event.before);
   const targetBlob = computeBlobKeyFromTile(event.targetIndex, event.before);
   const path = buildAutoPlayAnimationPath(event.sourceIndex, event.targetIndex, sourceBlob, targetBlob, event.before);
@@ -1510,7 +1527,7 @@ async function runAutoPlay() {
       startBoardTimerIfNeeded();
       const adjacency = tilesMeta.map(tile => getNeighbors(tile.index));
       let search = SplashSearch.solve([...state.tiles], adjacency, {history: state.history, strategyOnly: true, batchGroups: 6});
-      let prefetch = null, batchMovesLeft = 0;
+      let prefetch = null, batchMovesLeft = 0, silentMoves = 0;
       cancelSearch = () => { search.return(); prefetch?.return(); };
       let result = 'unknown';
       let nextPlanningStatus = 0;
@@ -1526,7 +1543,7 @@ async function runAutoPlay() {
           }
           autoPlayState.message = step.value.message;
           renderAutoPlaySession();
-          if (!step.value.complete && !await pauseAutoPlay(1500)) break;
+          if (autoPlayState.animate && !step.value.complete && !await pauseAutoPlay(1500)) break;
           nextPlanningStatus = performance.now() + 1500;
           continue;
         }
@@ -1570,7 +1587,11 @@ async function runAutoPlay() {
         // Recognize the final clearing immediately, without consuming an
         // unnecessary inter-move pause from the board's search budget.
         if (isBoardCleared(state.tiles)) { result = 'solved'; break; }
-        if (!await pauseAutoPlay(500)) break;
+        if (autoPlayState.animate) {
+          if (!await pauseAutoPlay(500)) break;
+        } else if ((++silentMoves & 15) === 0) {
+          await waitForAutoPlayMs(0);
+        }
       }
       search.return();
       prefetch?.return();
@@ -1603,10 +1624,16 @@ async function runAutoPlay() {
         state.history = [];
         state.dragState = createEmptyDragState();
         undoCount = 0;
-        if (result === 'unsolvable') break;
+        if (result === 'unsolvable' && autoPlayState.animate) break;
       }
       render();
-      if (!await pauseAutoPlay(AUTO_PLAY_RESULT_MS)) break;
+      if (autoPlayState.animate) {
+        if (!await pauseAutoPlay(AUTO_PLAY_RESULT_MS)) break;
+      } else {
+        // Even instantly solved/proved boards must yield to Stop and rendering.
+        await waitForAutoPlayMs(0);
+        if (autoPlayState.stopRequested) break;
+      }
       const fresh = createShuffledBoard();
       boardDeadline=performance.now()+AUTO_PLAY_SEARCH_MS;
       state.tiles = fresh;

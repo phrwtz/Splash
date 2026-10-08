@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Splash</title>
-    <link rel="stylesheet" href="styles.css?v=3a39c7ccc838" />
+    <link rel="stylesheet" href="styles.css?v=c0c2808d722c" />
   </head>
   <body>
     <main class="app">
@@ -138,6 +138,13 @@
       </section>
     </main>
 
+    <dialog id="auto-play-options" aria-labelledby="auto-play-options-title">
+      <h2 id="auto-play-options-title">Auto Play</h2>
+      <label><input id="auto-play-animation" type="checkbox" checked> Animate moves</label>
+      <p>Turn animation off to search continuously, count results, and save timed-out boards.</p>
+      <div class="saved-timeout-actions"><button id="auto-play-start" type="button">Start Auto Play</button></div>
+      <form method="dialog"><button type="submit">Cancel</button></form>
+    </dialog>
     <dialog id="saved-timeouts-dialog" aria-labelledby="saved-timeouts-title">
       <h2 id="saved-timeouts-title">Timed-out boards</h2>
       <p>Select a board, then choose Play this board to try solving it yourself. Playing one stops Auto Play. Clear this board removes it from this list.</p>
@@ -150,6 +157,6 @@
       <form method="dialog"><button type="submit">Close</button></form>
     </dialog>
     <script src="search.js?v=25c01da7fb5c"></script>
-    <script src="app.js?v=151e789f84b4"></script>
+    <script src="app.js?v=4acbe1510cc4"></script>
   </body>
 </html>

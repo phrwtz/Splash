@@ -12,7 +12,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_PATH||'playwright'),assert=requi
   SplashSearch.solve=function*(){while(true)yield {type:'search'};};
   createShuffledBoard=()=>{freshBoards++;return deal.map((c,i)=>deal[(i+1)%60]);};render();
  });
- await p.getByRole('button',{name:'Auto Play',exact:true}).click();
+ await p.getByRole('button',{name:'Auto Play',exact:true}).click();await p.getByRole('button',{name:'Start Auto Play',exact:true}).click();
  assert.equal(await p.evaluate(()=>AUTO_PLAY_SEARCH_MS),300000);
  await p.clock.fastForward(299000);
  assert.equal(await p.evaluate(()=>savedTimedOutBoards.length),0);
@@ -41,7 +41,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_PATH||'playwright'),assert=requi
  // Stop is cancellation, not another timeout.
  await p.clock.install();await p.clock.pauseAt(new Date());
  await p.evaluate(()=>{SplashSearch.solve=function*(){while(true)yield {type:'search'};};});
- await p.getByRole('button',{name:'Auto Play',exact:true}).click();await p.clock.runFor(50);
+ await p.getByRole('button',{name:'Auto Play',exact:true}).click();await p.getByRole('button',{name:'Start Auto Play',exact:true}).click();await p.clock.runFor(50);
  await p.getByRole('button',{name:'Stop',exact:true}).click();await p.clock.runFor(100);
  assert.equal(await p.evaluate(()=>savedTimedOutBoards.length),1);
  // Shared actions remove only the selection, even when a new timeout arrives.

@@ -423,3 +423,11 @@ board and Clear this board buttons remain disabled without a selection. Clearing
 removes only the selected entry and persists the updated list; opening or
 clearing resets the selection. The timeout browser regression checks multiple
 entries, arriving timeouts, deletion persistence, empty lists, and storage errors.
+
+Auto Play starts through an options dialog with an Animate moves checkbox
+(default on; remembered during the visit). Search-only mode applies verified
+moves without paths, animation, or playback pauses, yields between boards and
+during search for Stop, and continues past solved or proved-unsolvable boards.
+Five-minute timeouts still save the original deal and advance to the next board.
+`node tests/search-only-browser.cjs` verifies both the modal and search-only
+counters, immediate real solutions, timeout persistence, and cancellation.
