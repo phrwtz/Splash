@@ -1,5 +1,21 @@
 # Auto Play checks
 
+October 10 policy: Auto Play now passes `moveTreeSearch: false` for both live
+planning and prefetched batches. This enforces strategic-only widening and
+disables bounded exact section endgames, small-position move-tree proofs,
+and unrestricted move-tree fallback. Cached exact endgames cannot bypass
+this policy. Strategic planning continues until a solution, an established
+structural impossibility proof, Stop, or the existing five-minute deadline.
+Budget exhaustion is unknown and never reports an unsolvable board.
+
+Run `node tests/no-move-tree.cjs` to verify that exact search is never entered,
+including on the two recent screenshot boards, and that strategic completion,
+widening, cancellation, and both Auto Play call sites obey the policy.
+`node tests/search-only-browser.cjs` verifies actual UI completion, timeout
+handling, and cancellation. The lower-level solver API retains move-tree
+search by default for other callers; earlier endgame regression tests below
+exercise that API and no longer describe the Auto Play policy.
+
 Auto Play now requests progressive search: a planning pass of at most 2,048
 steps finds easy complete plans, then promising legal moves animate immediately.
 Established structural failures are rejected silently; failed speculative branches
@@ -383,9 +399,11 @@ Run the actual UI with `SECTION_FIXTURE=./widened-section.cjs node
 tests/section-browser.cjs` using the existing Playwright environment variables.
 
 
-Verified section endgames: at 18 or fewer occupied tiles, section planning
-now tries a bounded exact continuation (`sectionEndgameTiles: 18`,
-`sectionEndgameStates: 65536`). This permits building linked secondary bridges
+Verified section endgames: at 24 or fewer occupied tiles, section planning
+tries a bounded exact continuation (`sectionEndgameTiles: 24`,
+`sectionEndgameStates: 65536`). Remainders of 19–24 occupied tiles receive
+a preliminary screen capped at 2,048 states; at 18 or fewer tiles, the full
+configured budget remains available. This permits building linked secondary bridges
 before clearing them. Only a complete legal continuation is played; exhausted
 proof budgets remain unknown. The pass yields for cancellation and a fully
 verified section endgame is cached for Stop/resume. Zero states disables it.
@@ -431,3 +449,21 @@ during search for Stop, and continues past solved or proved-unsolvable boards.
 Five-minute timeouts still save the original deal and advance to the next board.
 `node tests/search-only-browser.cjs` verifies both the modal and search-only
 counters, immediate real solutions, timeout persistence, and cancellation.
+
+
+October 9 early-endgame regression: the user-solved timeout board needs a
+bridge-building continuation before the immediate-clearance planner reaches
+18 tiles. Screening at up to 24 tiles finds a complete 40-move solution.
+`node tests/early-endgame.cjs` checks default Auto Play options, independently
+replays every move, repeats with a fresh solver, and verifies cancellation.
+Run the UI check with `SECTION_FIXTURE=./early-endgame.cjs node
+tests/section-browser.cjs` using the existing Playwright environment variables.
+
+
+Second October 9 timeout screenshot: the earlier 24-tile continuation screen
+also solves this board without another solver change.
+`node tests/early-endgame-two.cjs` requires a complete 40-move solution within
+15 seconds, independently checks every transfer, repeats from a fresh solver,
+and verifies cancellation without changing the original tiles. Run the UI
+check with `SECTION_FIXTURE=./early-endgame-two.cjs node
+tests/section-browser.cjs` using the existing Playwright environment variables.

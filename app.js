@@ -183,7 +183,8 @@ state.initialTiles = [...state.tiles];
 const SAVED_TIMEOUTS_KEY = 'splash.timedOutBoards.v1';
 let savedTimeoutStorageWarning = '';
 let savedTimedOutBoards = readSavedTimedOutBoards();
-let selectedTimedOutBoard = null;
+const selectedTimedOutBoards = new Set();
+let timedOutSelectionAnchor = null;
 let loadingTimedOutBoard = false;
 
 function readSavedTimedOutBoards() {
@@ -225,25 +226,46 @@ function renderSavedTimedOutBoards() {
   }
   savedTimedOutBoards.forEach((entry, index) => {
     const row = document.createElement('label'); row.className = 'saved-timeout-row';
-    const radio = document.createElement('input'); radio.type = 'radio'; radio.name = 'saved-timeout-selection';
-    radio.checked = entry === selectedTimedOutBoard; radio.disabled = loadingTimedOutBoard;
-    radio.addEventListener('change', () => { selectedTimedOutBoard = entry; updateSavedBoardActions(); });
+    const checkbox = document.createElement('input'); checkbox.type = 'checkbox';
+    checkbox.checked = selectedTimedOutBoards.has(entry); checkbox.disabled = loadingTimedOutBoard;
+    row.addEventListener('click', event => {
+      if (loadingTimedOutBoard) return;
+      // Handle label clicks directly so range selection keeps modifier keys.
+      if (event.target !== checkbox) {
+        event.preventDefault();
+        checkbox.checked = !selectedTimedOutBoards.has(entry);
+      }
+      const shiftKey = event.shiftKey;
+      const anchorIndex = savedTimedOutBoards.indexOf(timedOutSelectionAnchor);
+      const checked = checkbox.checked;
+      const start = shiftKey && anchorIndex >= 0 ? Math.min(index, anchorIndex) : index;
+      const end = shiftKey && anchorIndex >= 0 ? Math.max(index, anchorIndex) : index;
+      for (let i = start; i <= end; i++) {
+        if (checked) selectedTimedOutBoards.add(savedTimedOutBoards[i]);
+        else selectedTimedOutBoards.delete(savedTimedOutBoards[i]);
+      }
+      timedOutSelectionAnchor = entry;
+      list.querySelectorAll('input').forEach((input, i) => {
+        input.checked = selectedTimedOutBoards.has(savedTimedOutBoards[i]);
+      });
+      updateSavedBoardActions();
+    });
     const label = document.createElement('span');
     label.textContent = `Board ${savedTimedOutBoards.length-index} — ${new Date(entry.savedAt).toLocaleString()}`;
-    row.append(radio, label); list.append(row);
+    row.append(checkbox, label); list.append(row);
   });
   updateSavedBoardActions();
 }
 
 function updateSavedBoardActions() {
-  const disabled = loadingTimedOutBoard || !savedTimedOutBoards.includes(selectedTimedOutBoard);
-  document.getElementById('saved-timeout-play').disabled = disabled;
-  document.getElementById('saved-timeout-clear').disabled = disabled;
+  const count = selectedTimedOutBoards.size;
+  document.getElementById('saved-timeout-play').disabled = loadingTimedOutBoard || count !== 1;
+  document.getElementById('saved-timeout-clear').disabled = loadingTimedOutBoard || count === 0;
 }
 
 async function playSelectedTimedOutBoard() {
-  const entry = selectedTimedOutBoard;
-  if (loadingTimedOutBoard || !savedTimedOutBoards.includes(entry)) return;
+  const [entry] = selectedTimedOutBoards;
+  if (loadingTimedOutBoard || selectedTimedOutBoards.size !== 1 || !savedTimedOutBoards.includes(entry)) return;
   loadingTimedOutBoard = true; renderSavedTimedOutBoards();
   try {
     autoPlayState.stopRequested = true; resolveAutoPlayStep(false);
@@ -258,10 +280,10 @@ async function playSelectedTimedOutBoard() {
   }
 }
 
-function clearSelectedTimedOutBoard() {
-  const index = savedTimedOutBoards.indexOf(selectedTimedOutBoard);
-  if (loadingTimedOutBoard || index < 0) return;
-  savedTimedOutBoards.splice(index, 1); selectedTimedOutBoard = null;
+function clearSelectedTimedOutBoards() {
+  if (loadingTimedOutBoard || !selectedTimedOutBoards.size) return;
+  savedTimedOutBoards = savedTimedOutBoards.filter(entry => !selectedTimedOutBoards.has(entry));
+  selectedTimedOutBoards.clear(); timedOutSelectionAnchor = null;
   try {
     localStorage.setItem(SAVED_TIMEOUTS_KEY, JSON.stringify(savedTimedOutBoards));
     savedTimeoutStorageWarning = '';
@@ -566,14 +588,14 @@ newBoardBtn?.addEventListener('click', () => {
 });
 
 document.getElementById('saved-timeouts-btn')?.addEventListener('click', () => {
-  selectedTimedOutBoard = null;
+  selectedTimedOutBoards.clear(); timedOutSelectionAnchor = null;
   document.getElementById('saved-timeouts-dialog').showModal();
   renderSavedTimedOutBoards();
 });
 
 document.getElementById('saved-timeout-play')?.addEventListener('click', () => { void playSelectedTimedOutBoard(); });
-document.getElementById('saved-timeout-clear')?.addEventListener('click', clearSelectedTimedOutBoard);
-document.getElementById('saved-timeouts-dialog')?.addEventListener('close', () => { selectedTimedOutBoard = null; updateSavedBoardActions(); });
+document.getElementById('saved-timeout-clear')?.addEventListener('click', clearSelectedTimedOutBoards);
+document.getElementById('saved-timeouts-dialog')?.addEventListener('close', () => { selectedTimedOutBoards.clear(); timedOutSelectionAnchor = null; updateSavedBoardActions(); });
 
 autoPlayBtn?.addEventListener('click', () => {
   if (
@@ -1409,7 +1431,7 @@ async function animateSearchEvent(event) {
 // The worker receives the predicted board/history and never touches live tiles.
 function createAutoPlayPrefetch(tiles, adjacency, history) {
   if (typeof Worker === 'undefined') return null;
-  const options = {strategyOnly: true, batchGroups: 6, history};
+  const options = {strategyOnly: true, moveTreeSearch: false, batchGroups: 6, history};
   const source = `const SplashSearch = (${createSplashSearch.toString()})();
     onmessage = ({data}) => {
       const search = SplashSearch.solve(data.tiles, data.adjacency, data.options);
@@ -1526,7 +1548,7 @@ async function runAutoPlay() {
       autoPlayState.message = 'Planning clearances…';
       startBoardTimerIfNeeded();
       const adjacency = tilesMeta.map(tile => getNeighbors(tile.index));
-      let search = SplashSearch.solve([...state.tiles], adjacency, {history: state.history, strategyOnly: true, batchGroups: 6});
+      let search = SplashSearch.solve([...state.tiles], adjacency, {history: state.history, strategyOnly: true, moveTreeSearch: false, batchGroups: 6});
       let prefetch = null, batchMovesLeft = 0, silentMoves = 0;
       cancelSearch = () => { search.return(); prefetch?.return(); };
       let result = 'unknown';

@@ -723,15 +723,19 @@ function createSplashSearch() {
   // Verified mode waits for a complete continuation. Progressive mode bounds
   // the planning pass, then emits legal attempts and exact failed-branch undos.
   function* solve(tiles, adjacency, {
-    strategyStates=120000, sectionStates=120000, sectionWidth=8, sectionRestarts=16, sectionEndgameTiles=18, sectionEndgameStates=65536, localStates=1536, planVariants=24, layoutLimit=192, bridgeStates=16384,
-    history=[], lookaheadStates, endgameTiles, progressive=false, stopBeforeExhaustive=false, strategyOnly=false, batchGroups=0, proofTiles=20, proofStates=16384
+    strategyStates=120000, sectionStates=120000, sectionWidth=8, sectionRestarts=16, sectionEndgameTiles=24, sectionEndgameStates=65536, localStates=1536, planVariants=24, layoutLimit=192, bridgeStates=16384,
+    moveTreeSearch=true, history=[], lookaheadStates, endgameTiles, progressive=false, stopBeforeExhaustive=false, strategyOnly=false, batchGroups=0, proofTiles=20, proofStates=16384
   } = {}) {
     // Accept the old options for saved integrations; they no longer authorize
     // speculative playback or change the meaning of an unresolved position.
     for(const [key,value] of Object.entries({strategyStates,sectionStates,sectionWidth,sectionRestarts,sectionEndgameTiles,sectionEndgameStates,localStates,planVariants,layoutLimit,bridgeStates,lookaheadStates,endgameTiles,batchGroups,proofTiles,proofStates}))
       if(value!==undefined && (!Number.isSafeInteger(value)||value<0))throw new RangeError(`${key} must be a nonnegative safe integer`);
+    // Auto Play disables every move-tree search, including bounded proofs.
+    // Exhausted strategic budgets keep widening until the caller cancels.
+    if(!moveTreeSearch)strategyOnly=true;
     const graphKey=JSON.stringify(adjacency);
-    if(continuation?.graph===graphKey&&(!strategyOnly||continuation.strategic)){
+    if(continuation?.graph===graphKey&&(!strategyOnly||continuation.strategic)&&
+      (moveTreeSearch||continuation.events.every(e=>e.plan.kind==='clear-secondary'))){
       const start=continuation.events.findIndex(e=>e.before.every((c,i)=>c===tiles[i])&&e.before.length===tiles.length);
       if(start>=0){for(const event of continuation.events.slice(start))yield event;return 'solved';}
     }
@@ -952,8 +956,13 @@ function createSplashSearch() {
           // Immediate clearances can miss a bridge that must be built before
           // clearing. Verify a bounded endgame before discarding this section.
           // Unknown leaves section planning active; failure rejects this node.
-          if(sectionEndgameStates&&current.filter(Boolean).length<=sectionEndgameTiles){
-            const proof=exact(current,{left:sectionEndgameStates});
+          const remaining=current.filter(Boolean).length;
+          if(moveTreeSearch&&sectionEndgameStates&&remaining<=sectionEndgameTiles){
+            // Screen larger remainders cheaply before immediate clearances
+            // discard a bridge-building continuation. Keep the deeper budget
+            // for small endgames; an exhausted screen remains unknown.
+            const endgameBudget=remaining>18?Math.min(sectionEndgameStates,2048):sectionEndgameStates;
+            const proof=exact(current,{left:endgameBudget});
             let step;
             try {
               while(!(step=proof.next()).done)yield {...step.value,phase:'section-endgame'};
@@ -1057,6 +1066,7 @@ function createSplashSearch() {
     // structural obstruction enters dead. Unknown planning results never do.
     // Failed branches have no forward/backtrack events and cannot reach the UI.
     function* exact(b,budget=null) {
+      if(!moveTreeSearch)throw new Error('Move-tree search is disabled');
       if(b.every(c=>!c))return [];
       const key=keyOf(b);if(dead.has(key))return null;
       if(winning.has(key))return winning.get(key);
@@ -1091,7 +1101,7 @@ function createSplashSearch() {
     // A failed proof rejects a proposed batch; unknown never means impossible.
     // A successful path is evidence only: playback still uses strategic jobs.
     function* smallPositionProof(b) {
-      if(!proofStates||b.filter(Boolean).length>proofTiles)return undefined;
+      if(!moveTreeSearch||!proofStates||b.filter(Boolean).length>proofTiles)return undefined;
       const proof=exact(b,{left:proofStates});
       try {
         let step;
