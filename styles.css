@@ -703,3 +703,5 @@ button:focus-visible {
 
 .saved-timeout-row:has(input:checked) { background: var(--bg); outline: 2px solid var(--line); border-radius: 6px; }
 .saved-timeout-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+
+.tile-group.search-selected .inner { stroke: #111; stroke-width: 6px; }

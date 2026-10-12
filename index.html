@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Splash</title>
-    <link rel="stylesheet" href="styles.css?v=c0c2808d722c" />
+    <link rel="stylesheet" href="styles.css?v=e26d40844852" />
   </head>
   <body>
     <main class="app">
@@ -96,9 +96,10 @@
             <p id="auto-play-status" role="status" aria-live="polite"></p>
             <div class="auto-play-stats">
               <span>Session: <span id="auto-play-elapsed">0 minutes, 0 seconds</span></span>
+              <span>Current search: <span id="auto-play-search-elapsed">0 minutes, 0 seconds</span></span>
               <span>Solved: <span id="auto-play-solved">0</span></span>
               <span>Proved unsolvable: <span id="auto-play-unsolvable">0</span></span>
-              <span>Timed out: <span id="auto-play-unknown">0</span></span>
+              <span hidden>Timed out: <span id="auto-play-unknown">0</span></span>
             </div>
           </section>
           <p id="no-moves-notice" class="no-moves-notice hidden" role="status" aria-live="polite">
@@ -140,8 +141,13 @@
 
     <dialog id="auto-play-options" aria-labelledby="auto-play-options-title">
       <h2 id="auto-play-options-title">Auto Play</h2>
-      <label><input id="auto-play-animation" type="checkbox" checked> Animate moves</label>
-      <p>Turn animation off to search continuously, count results, and save timed-out boards.</p>
+      <fieldset>
+        <legend>Display mode</legend>
+        <p><label><input id="auto-play-animation" type="radio" name="auto-play-display" value="animate" checked> Animate moves</label></p>
+        <p><label><input id="auto-play-process" type="radio" name="auto-play-display" value="process"> Display search process</label></p>
+        <p><label><input id="auto-play-no-display" type="radio" name="auto-play-display" value="none"> No display</label></p>
+      </fieldset>
+      <p>Display search process pauses briefly when the search goal changes. No display updates only the status and timers.</p>
       <div class="saved-timeout-actions"><button id="auto-play-start" type="button">Start Auto Play</button></div>
       <form method="dialog"><button type="submit">Cancel</button></form>
     </dialog>
@@ -156,7 +162,7 @@
       </div>
       <form method="dialog"><button type="submit">Close</button></form>
     </dialog>
-    <script src="search.js?v=25c01da7fb5c"></script>
-    <script src="app.js?v=4acbe1510cc4"></script>
+    <script src="search.js?v=3fd7db5b257d"></script>
+    <script src="app.js?v=13724a5087d8"></script>
   </body>
 </html>

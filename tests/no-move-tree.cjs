@@ -14,6 +14,5 @@ for(const fixture of ['early-endgame','early-endgame-two']){
  assert(widened);g.return();assert.deepEqual(board,original);
 }
 const app=fs.readFileSync(require.resolve('../app.js'),'utf8');
-assert.equal((app.match(/strategyOnly: true, moveTreeSearch: false, batchGroups: 6/g)||[]).length,2,'Live and prefetched Auto Play must disable trees');
-assert.match(app,/AUTO_PLAY_SEARCH_MS = 5 \* 60 \* 1000/);
-console.log('Passed no exact search, strategic widening, legal completion, cancellation, live/prefetch policy, and five-minute deadline.');
+assert.equal((app.match(/hybrid: true, batchGroups: 0/g)||[]).length,2,'Live and prefetched Auto Play use the hybrid policy');
+console.log('Passed explicit no-tree API and Auto Play hybrid call sites.');

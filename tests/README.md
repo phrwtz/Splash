@@ -1,4 +1,79 @@
+Long-running search now bounds rich assessments to 2,048 entries, proved
+failed positions to 50,000, and successful continuation caches to 512.
+Strategic section candidates, visited states, and tried plans are also bounded.
+Eviction retains the active DFS branch and never changes proof semantics;
+forgotten positions can be searched again, so memory limits may cost time.
+Complete search still has no time limit. `bounded-search.cjs` tests cache
+saturation plus complete solutions/proofs with zero and tiny cache capacities.
+
+Auto Play now uses hybrid search: two strategic attempts of up to 30 seconds
+of computation each, then strategic planning with bounded exact section
+endgames and complete memoized move search. The complete phase has no time
+limit and remains cancellable. Every played sequence has a verified full
+continuation; stalled strategic plans never commit a speculative batch.
+Fresh runs produce solved or proved-unsolvable outcomes, never timeouts.
+Previously saved timed-out boards remain available. No display and Animate
+moves still run off the page thread; computation counters include workers.
+`hybrid.cjs`, `hybrid-browser.cjs`, and `hybrid-board-check.cjs` test escalation,
+proof/solution results, unlimited search, Stop, and the latest hard screenshot.
+`hybrid-worker-browser.cjs` runs the full default hybrid policy on the hard
+board in a worker with another tab in front and page timer yields blocked.
+`hybrid-proof.cjs` compares a complete-search impossibility result against an
+independent exhaustive checker. `hybrid-worker-stop-browser.cjs` checks real
+worker termination during unlimited search.
+The notes below record superseded policies.
+
+No display and Animate moves now start their main search in a dedicated
+worker, and unfinished worker batches continue in another worker. No display
+does not depend on page timer yields for search/playback. Inspection mode keeps
+its explicit checkpoints and pauses. `background-worker-browser.cjs` verifies
+the latest timeout screenshot clears with another tab foreground and page
+timer yields blocked, using the actual worker and computation-only budget.
+
+The five-minute Auto Play budget now counts time executing solver next() calls,
+including worker prefetch. Browser scheduling, worker delivery waits, and display
+pauses do not spend it. The current-search timer uses the same computation total;
+session time remains wall-clock time. Worker cumulative reports are charged once
+and workers also enforce their allotted computation budget.
+`computation-budget-browser.cjs` covers long idle delays, actual computation
+cutoff, worker reporting/cutoff, and Stop.
+
+Auto Play restarts strategic planning after 30 seconds of computation without
+a committed move. Each restart changes section rankings and group priorities,
+clears per-attempt search caches, and keeps committed tiles and undo history.
+Presentation pauses are excluded, and the existing five-minute deadline remains
+shared across attempts. Live searches and worker prefetch use the same policy.
+`restarts.cjs` checks retries, cleanup, and cancellation; `oct12-board.cjs`
+replays the latest screenshot independently; `oct12-browser.cjs` exercises it
+through the actual Auto Play UI. Restart exhaustion is never unsolvability.
+
+Whole-primary-group bridge jobs are now considered at every section size,
+so early donor connections are not lost before reaching the endgame.
+`oct11-board.cjs` independently replays the October 11 user-solved screenshot
+without move-tree search and checks fresh-run reproducibility.
+
+Animate moves does not outline the clearing group. Group outlines belong to
+Display search process; `animation-highlight-browser.cjs` checks both modes.
+
+The latest 21-tile remainder is unsolvable despite available legal moves.
+`stalled-remainder-oracle.cjs` is an independent offline diagnostic and visits
+about 1.6 million states. It is never used by Auto Play, whose strategic
+planner currently cannot prove this obstruction and may reach its timeout.
+
 # Auto Play checks
+
+Whole-group bridge planning now gets a bounded completion pass on remainders
+of up to 24 tiles before repeated immediate-clearance retries. Connected
+primary groups are favored over singleton layouts; boundary tiles convert
+first to retain donor access. The pass uses strategic group jobs only.
+`group-building.cjs` checks complete conversion before clearing, and
+`group-bridge-board.cjs` independently replays the latest pictured board
+without move-tree search.
+
+Display pauses do not consume the five-minute computation deadline or the
+current-search timer. Session time still includes them. No display batches
+checkpoints into short cooperative slices, with no goal-change pauses.
+`presentation-budget-browser.cjs` verifies timer/deadline exclusion.
 
 October 10 policy: Auto Play now passes `moveTreeSearch: false` for both live
 planning and prefetched batches. This enforces strategic-only widening and

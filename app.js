@@ -380,8 +380,15 @@ const analysisTransferState = {
 const autoPlayState = {
   session: null,
   animate: true,
+  displayMode: 'animate',
   phase: 'idle',
-  deadline: Infinity,
+  searchComputeMs: 0,
+  searchStartedAt: null,
+  searchEndedAt: null,
+  searchPausedMs: 0,
+  presentationStartedAt: null,
+  searchView: null,
+  searchGroup: [],
   message: '',
   active: false,
   stopRequested: false,
@@ -610,13 +617,14 @@ autoPlayBtn?.addEventListener('click', () => {
     return;
   }
   if (analysisTransferState.active) return;
-  document.getElementById('auto-play-animation').checked = autoPlayState.animate;
+  document.querySelector(`input[name="auto-play-display"][value="${autoPlayState.displayMode}"]`).checked = true;
   document.getElementById('auto-play-options').showModal();
 });
 
 document.getElementById('auto-play-start')?.addEventListener('click', () => {
   if (autoPlayState.active || !isAutoPlayAvailable() || analysisTransferState.active) return;
-  autoPlayState.animate = document.getElementById('auto-play-animation').checked;
+  autoPlayState.displayMode = document.querySelector('input[name="auto-play-display"]:checked').value;
+  autoPlayState.animate = autoPlayState.displayMode === 'animate';
   document.getElementById('auto-play-options').close();
   void runAutoPlay();
 });
@@ -1347,7 +1355,6 @@ function updateDemoControls() {
 }
 
 
-const AUTO_PLAY_SEARCH_MS = 5 * 60 * 1000;
 const AUTO_PLAY_RESULT_MS = 2 * 1000;
 
 function renderAutoPlaySession() {
@@ -1358,6 +1365,8 @@ function renderAutoPlaySession() {
   if (!session) return;
   const elapsed = (session.endedAt ?? performance.now()) - session.startedAt;
   document.getElementById('auto-play-elapsed').textContent = formatElapsedTimer(elapsed);
+  const searchElapsed = autoPlayState.searchComputeMs;
+  document.getElementById('auto-play-search-elapsed').textContent = formatElapsedTimer(searchElapsed);
   document.getElementById('auto-play-solved').textContent = String(session.solved);
   document.getElementById('auto-play-unsolvable').textContent = String(session.unsolvable);
   document.getElementById('auto-play-unknown').textContent = String(session.unknown);
@@ -1365,9 +1374,20 @@ function renderAutoPlaySession() {
   if (status.textContent !== autoPlayState.message) status.textContent = autoPlayState.message;
 }
 
+function showAutoPlaySearchPosition(event) {
+  if (autoPlayState.displayMode !== 'process') return;
+  autoPlayState.searchView = Array.isArray(event.tiles) ? [...event.tiles] : [...state.tiles];
+  const selected = new Set((event.objective?.cells || []).filter(i => autoPlayState.searchView[i] !== 'white'));
+  // Include every tile in the actual same-color blobs under examination.
+  for (const i of selected) for (const j of getNeighbors(i)) {
+    if (autoPlayState.searchView[j] === autoPlayState.searchView[i]) selected.add(j);
+  }
+  autoPlayState.searchGroup = [...selected];
+  renderInnerTiles();
+}
+
 function autoPlayInterrupted() {
-  return !autoPlayState.active || autoPlayState.stopRequested ||
-    (autoPlayState.phase === 'search' && performance.now() >= autoPlayState.deadline);
+  return !autoPlayState.active || autoPlayState.stopRequested;
 }
 
 async function pauseAutoPlay(ms) {
@@ -1379,6 +1399,19 @@ async function pauseAutoPlay(ms) {
   return !autoPlayInterrupted();
 }
 
+// Viewing a search position does not consume computation time.
+async function pauseAutoPlayPresentation(ms) {
+  const startedAt = performance.now();
+  autoPlayState.presentationStartedAt = startedAt;
+  try { return await pauseAutoPlay(ms); }
+  finally {
+    const elapsed = performance.now() - startedAt;
+    autoPlayState.searchPausedMs += elapsed;
+
+    autoPlayState.presentationStartedAt = null;
+  }
+}
+
 async function animateSearchEvent(event) {
   if (!autoPlayState.animate) {
     if (autoPlayInterrupted()) return false;
@@ -1386,6 +1419,9 @@ async function animateSearchEvent(event) {
     state.tiles = [...(backtrack ? event.before : event.after)];
     if (backtrack) { state.history.pop(); undoCount += 1; }
     else state.history.push({tiles: [...event.before]});
+    autoPlayState.message = event.plan
+      ? `${event.plan.description} — step ${event.plan.step} of ${event.plan.total}` : 'Playing…';
+    render();
     return true;
   }
   const sourceBlob = computeBlobKeyFromTile(event.sourceIndex, event.before);
@@ -1427,30 +1463,49 @@ async function animateSearchEvent(event) {
   return true;
 }
 
+// Charge synchronous solver execution only, never awaiting a browser/worker turn.
+function createAutoPlayTimedSearch(tiles, adjacency, options) {
+  const search = SplashSearch.solve(tiles, adjacency, options);
+  return {
+    next() {
+      const started = performance.now();
+      try { return search.next(); }
+      finally { autoPlayState.searchComputeMs += Math.max(0, performance.now()-started); }
+    },
+    return() { return search.return(); }
+  };
+}
+
 // Plan one future batch in a separate thread while the approved batch plays.
 // The worker receives the predicted board/history and never touches live tiles.
 function createAutoPlayPrefetch(tiles, adjacency, history) {
   if (typeof Worker === 'undefined') return null;
-  const options = {strategyOnly: true, moveTreeSearch: false, batchGroups: 6, history};
+  const options = {hybrid: true, batchGroups: 0, history};
   const source = `const SplashSearch = (${createSplashSearch.toString()})();
     onmessage = ({data}) => {
       const search = SplashSearch.solve(data.tiles, data.adjacency, data.options);
-      let lastProgress = 0;
+      let lastProgress = 0, computeMs = 0;
+      const advance = () => {
+        const started = performance.now();
+        try { return search.next(); }
+        finally { computeMs += Math.max(0, performance.now()-started); }
+      };
+      const report = payload => postMessage({...payload, computeMs});
       try {
         for (;;) {
-          const step = search.next();
-          if (step.done) { postMessage({kind:'done', result:step.value}); break; }
+          const step = advance();
+          if (step.done) { report({kind:'done', result:step.value}); break; }
           const event = step.value;
           if (event.type === 'batch-ready') {
             const events = [event];
-            for (let i=0; i<event.moveCount; i++) events.push(search.next().value);
-            postMessage({kind:'batch', events}); break;
+            for (let i=0; i<event.moveCount; i++) events.push(advance().value);
+            report({kind:'batch', events}); break;
           }
-          if (event.type !== 'search' || Date.now()-lastProgress >= 100) {
-            postMessage({kind:'event', event}); lastProgress=Date.now();
+          if (event.type !== 'search' || event.phase === 'complete-search' || event.restart || Date.now()-lastProgress >= 100) {
+            report({kind:'event', event}); lastProgress=Date.now();
           }
         }
-      } catch (error) { postMessage({kind:'error', message:String(error)}); }
+      } catch (error) { report({kind:'error', message:String(error)}); }
       finally { search.return(); close(); }
     };`;
   let worker, url;
@@ -1462,7 +1517,7 @@ function createAutoPlayPrefetch(tiles, adjacency, history) {
     return null;
   }
   const queue = [];
-  let closed = false, pending = null, fallback = null, endpoint = null;
+  let closed = false, pending = null, fallback = null, endpoint = null, workerComputeMs = 0;
   function finishWorker() { worker.terminate(); URL.revokeObjectURL(url); }
   function deliver() {
     if (pending && queue.length) { const resolve=pending; pending=null; resolve(queue.shift()); }
@@ -1471,11 +1526,15 @@ function createAutoPlayPrefetch(tiles, adjacency, history) {
     finishWorker();
     // If workers are unavailable in this browser, resume the same strategic
     // search cooperatively when its batch is requested.
-    fallback = SplashSearch.solve(tiles, adjacency, options);
+    fallback = createAutoPlayTimedSearch(tiles, adjacency, options);
     if (pending) { const resolve=pending; pending=null; resolve(fallback.next()); }
   }
   worker.onmessage = ({data}) => {
     if (closed) return;
+    if (Number.isFinite(data.computeMs) && data.computeMs > workerComputeMs) {
+      autoPlayState.searchComputeMs += data.computeMs-workerComputeMs;
+      workerComputeMs = data.computeMs;
+    }
     if (data.kind === 'error') { fail(); return; }
     if (data.kind === 'batch') {
       endpoint=data.events[0];
@@ -1495,6 +1554,7 @@ function createAutoPlayPrefetch(tiles, adjacency, history) {
     if (autoPlayInterrupted()) controller.return();
   },50);
   const controller = {
+    get runsInWorker() { return !fallback || fallback.runsInWorker === true; },
     get hasReadyBatch() { return queue.some(s=>s.value?.type==='batch-ready'); },
     get closed() { return closed; },
     next() {
@@ -1502,7 +1562,8 @@ function createAutoPlayPrefetch(tiles, adjacency, history) {
       if (queue.length) return Promise.resolve(queue.shift());
       if (!fallback && endpoint) {
         if (endpoint.complete) return Promise.resolve({done:true,value:'solved'});
-        fallback=SplashSearch.solve(endpoint.after,adjacency,{...options,history:endpoint.history});
+        fallback=createAutoPlayPrefetch(endpoint.after,adjacency,endpoint.history) ||
+          createAutoPlayTimedSearch(endpoint.after,adjacency,{...options,history:endpoint.history});
       }
       if (fallback) return Promise.resolve(fallback.next());
       return new Promise(resolve=>{pending=resolve;});
@@ -1538,25 +1599,41 @@ async function runAutoPlay() {
   undoCount = 0;
   hideMoveError(true);
   const tick = window.setInterval(renderAutoPlaySession, 250);
-  let boardDeadline=performance.now()+AUTO_PLAY_SEARCH_MS;
+  autoPlayState.searchView = null;
+  autoPlayState.searchGroup = [];
+  autoPlayState.searchStartedAt = performance.now();
+  autoPlayState.searchEndedAt = null;
+  autoPlayState.searchPausedMs = 0;
+  autoPlayState.searchComputeMs = 0;
   let cancelSearch = null;
   render();
   try {
     while (!autoPlayState.stopRequested) {
       autoPlayState.phase = 'search';
-      autoPlayState.deadline = boardDeadline;
+
       autoPlayState.message = 'Planning clearances…';
       startBoardTimerIfNeeded();
       const adjacency = tilesMeta.map(tile => getNeighbors(tile.index));
-      let search = SplashSearch.solve([...state.tiles], adjacency, {history: state.history, strategyOnly: true, moveTreeSearch: false, batchGroups: 6});
+      const searchOptions = {history: state.history, hybrid: true, batchGroups: 0};
+      // Inspection mode retains deliberate checkpoints. Other modes plan off
+      // the page thread so hidden-tab timer throttling cannot stop the search.
+      let search = (autoPlayState.displayMode !== 'process' &&
+        createAutoPlayPrefetch([...state.tiles], adjacency, state.history)) ||
+        createAutoPlayTimedSearch([...state.tiles], adjacency, searchOptions);
       let prefetch = null, batchMovesLeft = 0, silentMoves = 0;
       cancelSearch = () => { search.return(); prefetch?.return(); };
-      let result = 'unknown';
+      let result = null;
       let nextPlanningStatus = 0;
+      let lastSearchGoal = null;
+      let lastSearchYield = performance.now();
+      let searchStepsSinceYield = 0;
       while (!autoPlayInterrupted()) {
         const step = await search.next();
         if (autoPlayInterrupted()) break;
-        if (step.done) { result = step.value; break; }
+        if (step.done) {
+          if (!['solved','unsolvable'].includes(step.value)) throw new Error('Hybrid search ended without a conclusion');
+          result = step.value; break;
+        }
         if (step.value.type === 'batch-ready') {
           if (!step.value.complete && Array.isArray(step.value.after)) {
             prefetch?.return();
@@ -1564,8 +1641,9 @@ async function runAutoPlay() {
             batchMovesLeft = prefetch ? step.value.moveCount : 0;
           }
           autoPlayState.message = step.value.message;
+          showAutoPlaySearchPosition({tiles:step.value.after});
           renderAutoPlaySession();
-          if (autoPlayState.animate && !step.value.complete && !await pauseAutoPlay(1500)) break;
+          if (autoPlayState.animate && !step.value.complete && !await pauseAutoPlayPresentation(1500)) break;
           nextPlanningStatus = performance.now() + 1500;
           continue;
         }
@@ -1581,6 +1659,7 @@ async function runAutoPlay() {
           const objective = step.value.objective;
           const label = step.value.phase === 'funding'
             ? `Checking ${objective?.color || 'bridge'} supplies`
+            : step.value.phase === 'complete-search' || step.value.phase === 'verification' ? 'Complete search — no time limit'
             : step.value.phase === 'planning'
             ? objective ? `Planning clearance of ${objective.color} group` : 'Planning clearances'
             : step.value.phase === 'endgame-check' ? 'Checking the small remaining board'
@@ -1588,19 +1667,35 @@ async function runAutoPlay() {
             : step.value.phase === 'exploration' ? 'Checking promising moves' : 'Checking a complete continuation';
           const progress = Number.isSafeInteger(step.value.positions)
             ? ` ${step.value.positions.toLocaleString()} search checks (including repeats).` : '';
-          if (performance.now() >= nextPlanningStatus) {
+          const searchGoal = JSON.stringify([step.value.phase, step.value.restart, objective?.color,
+            objective?.cells?.slice().sort((a,b)=>a-b)]);
+          const goalChanged = searchGoal !== lastSearchGoal;
+          if (step.value.phase === 'complete-search' || step.value.restart || performance.now() >= nextPlanningStatus ||
+              (autoPlayState.displayMode === 'process' && goalChanged)) {
             autoPlayState.message = step.value.message ? `${step.value.message}${progress}` : `${label}…${progress}`;
             nextPlanningStatus = performance.now() + 1500;
+            showAutoPlaySearchPosition(step.value);
             renderAutoPlaySession();
+            lastSearchGoal = searchGoal;
+            if (autoPlayState.displayMode === 'process' && goalChanged &&
+                !await pauseAutoPlayPresentation(500)) break;
           }
-          // Silent lookahead does not touch tiles, history, or animation.
+          // Search snapshots stay visible without changing playable tiles/history.
           // Yield to the browser so Stop and the time limit stay responsive.
-          await waitForAutoPlayMs(0);
+          if (!search.runsInWorker && (autoPlayState.displayMode === 'process' || ++searchStepsSinceYield >= 32 ||
+              performance.now()-lastSearchYield >= 16)) {
+            await waitForAutoPlayMs(0);
+            lastSearchYield = performance.now();
+            searchStepsSinceYield = 0;
+          }
           continue;
         }
         if (!state.tiles.every((c,i)=>c===(step.value.type==='backtrack'?step.value.after:step.value.before)[i])) {
           throw new Error('Auto Play plan does not match the displayed board');
         }
+        autoPlayState.searchView = null;
+        autoPlayState.searchGroup = autoPlayState.displayMode === 'process' ? step.value.plan?.cells || [] : [];
+        renderInnerTiles();
         if (!await animateSearchEvent(step.value)) break;
         if (prefetch && --batchMovesLeft === 0) {
           search.return();search=prefetch;prefetch=null;
@@ -1610,8 +1705,8 @@ async function runAutoPlay() {
         // unnecessary inter-move pause from the board's search budget.
         if (isBoardCleared(state.tiles)) { result = 'solved'; break; }
         if (autoPlayState.animate) {
-          if (!await pauseAutoPlay(500)) break;
-        } else if ((++silentMoves & 15) === 0) {
+          if (!await pauseAutoPlayPresentation(500)) break;
+        } else if (!search.runsInWorker && (++silentMoves & 15) === 0) {
           await waitForAutoPlayMs(0);
         }
       }
@@ -1621,6 +1716,7 @@ async function runAutoPlay() {
       if (result === 'paused') {
         // Preserve the diagnostic position and history for manual inspection.
         // This is neither a timeout nor an impossibility proof.
+        autoPlayState.searchEndedAt = performance.now();
         autoPlayState.phase = 'result';
         break;
       }
@@ -1631,14 +1727,12 @@ async function runAutoPlay() {
         state.dragState=createEmptyDragState();render();
         continue;
       }
+      autoPlayState.searchView = null;
+      autoPlayState.searchGroup = [];
+      autoPlayState.searchEndedAt = performance.now();
       autoPlayState.phase = 'result';
       autoPlayState.session[result] += 1;
-      autoPlayState.message = result === 'solved' ? 'Solution found!' :
-        result === 'unsolvable' ? 'Board is unsolvable!' : 'Timed out';
-      if (result === 'unknown') {
-        saveTimedOutBoard();
-        autoPlayState.message = 'Timed out — board saved. Continuing with a new board.';
-      }
+      autoPlayState.message = result === 'solved' ? 'Solution found!' : 'Board is unsolvable!';
       if (result !== 'solved') {
         // Restore the original deal, undoing even manual moves made before
         // Auto Play, before halting on a proof or advancing after a timeout.
@@ -1657,7 +1751,10 @@ async function runAutoPlay() {
         if (autoPlayState.stopRequested) break;
       }
       const fresh = createShuffledBoard();
-      boardDeadline=performance.now()+AUTO_PLAY_SEARCH_MS;
+      autoPlayState.searchStartedAt = performance.now();
+      autoPlayState.searchEndedAt = null;
+      autoPlayState.searchPausedMs = 0;
+      autoPlayState.searchComputeMs = 0;
       state.tiles = fresh;
       state.initialTiles = [...fresh];
       state.history = [];
@@ -1672,8 +1769,11 @@ async function runAutoPlay() {
   } finally {
     cancelSearch?.();
     window.clearInterval(tick);
+    autoPlayState.searchEndedAt ??= performance.now();
     autoPlayState.session.endedAt = performance.now();
     if (autoPlayState.stopRequested) autoPlayState.message = 'Auto Play stopped.';
+    autoPlayState.searchView = null;
+    autoPlayState.searchGroup = [];
     autoPlayState.active = false;
     autoPlayState.stopRequested = false;
     autoPlayState.phase = 'idle';
@@ -3299,6 +3399,7 @@ function syncAnalysisGraphWrapHeight() {
 }
 
 function renderAnalysisGraph() {
+  if (autoPlayState.active && autoPlayState.displayMode === 'none') return;
   if (!analysisGraphSvg) return;
 
   const analysisActive =
@@ -5067,13 +5168,14 @@ function computeBlobKeyFromTile(tileIndex, tiles) {
 }
 
 function renderInnerTiles() {
+  if (autoPlayState.active && autoPlayState.displayMode === 'none') return;
   const draggedSourceIndex = state.dragState.sourceIndex;
   const animatedSourceIndex = demoAnimation.active ? demoAnimation.sourceIndex : null;
 
   const groups = innerLayer.querySelectorAll('.tile-group');
   groups.forEach((group) => {
     const idx = Number(group.getAttribute('data-index'));
-    const color = state.tiles[idx];
+    const color = autoPlayState.searchView?.[idx] ?? state.tiles[idx];
     const inner = group.querySelector('.inner');
 
     const displayColor = draggedSourceIndex === idx || animatedSourceIndex === idx ? 'white' : color;
@@ -5082,6 +5184,7 @@ function renderInnerTiles() {
     group.classList.toggle('draggable', appState.mode === 'play' && !autoPlayState.active && isMovable(color));
     group.classList.toggle('dragging-source', draggedSourceIndex === idx);
     group.classList.toggle('selected-blob', isSelectedBoardTileInAnalysisBlob(idx));
+    group.classList.toggle('search-selected', autoPlayState.active && autoPlayState.displayMode === 'process' && autoPlayState.searchGroup.includes(idx));
     group.setAttribute(
       'aria-label',
       `Row ${tilesMeta[idx].row + 1}, Column ${tilesMeta[idx].col + 1}, ${displayColor} tile`
