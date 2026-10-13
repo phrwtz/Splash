@@ -200,9 +200,9 @@ function readSavedTimedOutBoards() {
   }
 }
 
-function saveTimedOutBoard() {
+function saveTimedOutBoard(outcome = 'timed-out') {
   // Store the original deal, including cells cleared before Auto Play started.
-  savedTimedOutBoards.unshift({savedAt: Date.now(), tiles: [...state.initialTiles]});
+  savedTimedOutBoards.unshift({savedAt: Date.now(), outcome, tiles: [...state.initialTiles]});
   try {
     localStorage.setItem(SAVED_TIMEOUTS_KEY, JSON.stringify(savedTimedOutBoards));
     savedTimeoutStorageWarning = '';
@@ -214,7 +214,7 @@ function saveTimedOutBoard() {
 
 function renderSavedTimedOutBoards() {
   const button = document.getElementById('saved-timeouts-btn');
-  if (button) button.textContent = `Timed-out boards (${savedTimedOutBoards.length})`;
+  if (button) button.textContent = `Saved boards (${savedTimedOutBoards.length})`;
   const dialog = document.getElementById('saved-timeouts-dialog');
   if (!dialog?.open) return;
   document.getElementById('saved-timeouts-storage').textContent = savedTimeoutStorageWarning ||
@@ -222,7 +222,7 @@ function renderSavedTimedOutBoards() {
   const list = document.getElementById('saved-timeouts-list');
   list.replaceChildren();
   if (!savedTimedOutBoards.length) {
-    const empty = document.createElement('p'); empty.textContent = 'No timed-out boards saved yet.'; list.append(empty);
+    const empty = document.createElement('p'); empty.textContent = 'No unsolvable or timed-out boards saved yet.'; list.append(empty);
   }
   savedTimedOutBoards.forEach((entry, index) => {
     const row = document.createElement('label'); row.className = 'saved-timeout-row';
@@ -251,7 +251,7 @@ function renderSavedTimedOutBoards() {
       updateSavedBoardActions();
     });
     const label = document.createElement('span');
-    label.textContent = `Board ${savedTimedOutBoards.length-index} — ${new Date(entry.savedAt).toLocaleString()}`;
+    label.textContent = `Board ${savedTimedOutBoards.length-index} — ${entry.outcome === 'unsolvable' ? 'Unsolvable' : 'Timed out'} — ${new Date(entry.savedAt).toLocaleString()}`;
     row.append(checkbox, label); list.append(row);
   });
   updateSavedBoardActions();
@@ -1666,7 +1666,8 @@ async function runAutoPlay() {
             : step.value.phase === 'batch-check' ? 'Checking the board after planned clearances'
             : step.value.phase === 'exploration' ? 'Checking promising moves' : 'Checking a complete continuation';
           const progress = Number.isSafeInteger(step.value.positions)
-            ? ` ${step.value.positions.toLocaleString()} search checks (including repeats).` : '';
+            ? ` ${step.value.positions.toLocaleString()} search checks (including repeats).` +
+              (step.value.proofStats ? ` ${step.value.proofStats.cacheHits.toLocaleString()} cached proofs reused; ${step.value.proofStats.commuted.toLocaleString()} equivalent move orders skipped.` : '') : '';
           const searchGoal = JSON.stringify([step.value.phase, step.value.restart, objective?.color,
             objective?.cells?.slice().sort((a,b)=>a-b)]);
           const goalChanged = searchGoal !== lastSearchGoal;
@@ -1732,6 +1733,7 @@ async function runAutoPlay() {
       autoPlayState.searchEndedAt = performance.now();
       autoPlayState.phase = 'result';
       autoPlayState.session[result] += 1;
+      if (result === 'unsolvable') saveTimedOutBoard('unsolvable');
       autoPlayState.message = result === 'solved' ? 'Solution found!' : 'Board is unsolvable!';
       if (result !== 'solved') {
         // Restore the original deal, undoing even manual moves made before
@@ -5393,7 +5395,7 @@ function updateClearBoardButtonState() {
     if (button) button.disabled = autoPlayState.active;
   }
   const savedButton = document.getElementById('saved-timeouts-btn');
-  if (savedButton) savedButton.textContent = `Timed-out boards (${savedTimedOutBoards.length})`;
+  if (savedButton) savedButton.textContent = `Saved boards (${savedTimedOutBoards.length})`;
   if (autoPlayBtn) {
     const regularPlayActive =
       appState.mode === 'play' &&

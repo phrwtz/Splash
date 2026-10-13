@@ -1,17 +1,35 @@
+Complete proofs now use collision-free packed board keys (five colors per
+UTF-16 code unit), retain up to 500,000 failed states, and refresh reused states.
+Exact search uses conservative sleep sets to omit commuting move orders: the
+complete source/target blobs and their neighboring cells must be independent.
+Failure with a nonempty sleep set is never cached as global impossibility.
+Structural checks additionally reject <=32-tile positions with no legal move
+preserving occupied-component color balance. Checkpoints expose proof-cache
+hits and omitted equivalent orders; the UI displays both counters.
+`proof-reduction.cjs` compares commuting reduction on/off with an independent
+solver, including connected sparse boards. `sleep-order.cjs` deliberately
+uses only component-balance pruning to exercise actual commuting exclusions
+on 80 further graphs. `oct13-proof-benchmark.cjs` runs a bounded hard-board
+measurement (BENCHMARK_MS sets its computation wall-clock limit). `oct13-board.cjs` is the user's
+17-hour stalled original deal; bounded benchmarks are not impossibility proofs.
+
 Long-running search now bounds rich assessments to 2,048 entries, proved
-failed positions to 50,000, and successful continuation caches to 512.
+failed positions to 500,000, and successful continuation caches to 512.
 Strategic section candidates, visited states, and tried plans are also bounded.
 Eviction retains the active DFS branch and never changes proof semantics;
 forgotten positions can be searched again, so memory limits may cost time.
 Complete search still has no time limit. `bounded-search.cjs` tests cache
 saturation plus complete solutions/proofs with zero and tiny cache capacities.
 
-Auto Play now uses hybrid search: two strategic attempts of up to 30 seconds
-of computation each, then strategic planning with bounded exact section
+Auto Play now uses hybrid search: six strategic attempts of up to 60 seconds
+of computation each, widening section frontiers from 8 to 16 to 32 candidates, then strategic planning with bounded exact section
 endgames and complete memoized move search. The complete phase has no time
 limit and remains cancellable. Every played sequence has a verified full
 continuation; stalled strategic plans never commit a speculative batch.
 Fresh runs produce solved or proved-unsolvable outcomes, never timeouts.
+Partial-plan exact checks stop after 65,536 states so other reductions get a turn;
+only the original-board fallback remains unlimited. Proven-unsolvable original
+deals are automatically saved for replay with an outcome label.
 Previously saved timed-out boards remain available. No display and Animate
 moves still run off the page thread; computation counters include workers.
 `hybrid.cjs`, `hybrid-browser.cjs`, and `hybrid-board-check.cjs` test escalation,
