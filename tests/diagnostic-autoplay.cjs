@@ -1,0 +1,10 @@
+const assert=require('node:assert/strict'),{solve}=require('../search.js'),{board,adj}=require('./diagnostic-board.cjs');
+const names=['white','red','blue','purple','yellow','orange','green'];let current=board.map(c=>names.indexOf(c));
+const initial=board.slice(),search=solve(board,adj,{hybrid:true,beamSearch:false});let step,moves=0,proof=false,start=Date.now();
+const blob=i=>{const q=[i],seen=new Set(q);for(const x of q)for(const j of adj[x])if(current[j]===current[i]&&!seen.has(j)){seen.add(j);q.push(j);}return q;};
+try{while(!(step=search.next()).done){assert(Date.now()-start<60000,'Latest board should finish within one minute');const e=step.value;proof ||= (e.proofStats?.calls||0)>0;if(e.type!=='forward')continue;assert(e.plan.verified&&e.plan.continuationVerified);assert.deepEqual(e.before,current.map(c=>names[c]));const i=e.sourceIndex,j=e.targetIndex,target=new Set(blob(j));assert(current[i]&&current[j]&&!(current[i]&current[j]));assert(blob(i).some(x=>adj[x].some(y=>target.has(y))));const mix=current[i]|current[j];current[i]=0;current[j]=mix===7?0:mix;assert.deepEqual(e.after,current.map(c=>names[c]));moves++;}}finally{search.return();}
+assert.equal(step.value,'solved');assert.equal(moves,40);assert(current.every(c=>!c));assert(proof,'Default Auto Play must have access to diagnostic move verification');assert.deepEqual(board,initial);
+console.log('PASS: default Auto Play uses diagnostic strategy and independently clears latest board:',Date.now()-start,'ms,',moves,'moves');
+// Cancellation unwinds a diagnostic continuation while its proof is active.
+delete require.cache[require.resolve('../search.js')];
+const cancel=require('../search.js').solve(board,adj,{hybrid:true,beamSearch:false,quickPlanMs:0,strategyStates:0,sectionStates:0,bridgeStates:0});let active=false;const cancelStart=Date.now();while(!(step=cancel.next()).done){if(step.value.proofStats?.calls){active=true;break;}assert(Date.now()-cancelStart<5000);}assert(active);cancel.return();assert.deepEqual(board,initial);console.log('PASS: active diagnostic proof cancellation and unchanged input.');

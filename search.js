@@ -1,4 +1,5 @@
-/* Resource-aware plan search with a silent complete fallback.
+/* Resource-aware plan search. Auto Play shares offline beam and diagnostic
+ * strategies alongside group and interacting-bridge planning; the caller owns its deadline.
  * Events are forward moves, backtracks, or silent search checkpoints. No timer or DOM
  * dependencies: the player owns the wall-clock limit and animation scheduling.
  */
@@ -726,6 +727,10 @@ function createSplashSearch() {
   // One verified continuation survives Stop/Start. Reuse requires the exact
   // board and graph, so edits or a different deal cannot inherit stale plans.
   let continuation=null;
+  // Only context-independent failure proofs enter this cache. Retain it across
+  // Stop/Start; sleep-set-relative failures remain local and are never saved.
+  // A different graph or cache limit replaces the retained memory.
+  let proofMemory=null;
   // Strategic search has two distinct layers. A bounded planner searches whole
   // clearing jobs, including their actual donor assignments and execution order.
   // If its vocabulary/budget is insufficient, complete search stays silent.
@@ -744,25 +749,26 @@ function createSplashSearch() {
   }
   function boundedSet(limit) {
     const cache=new Set(),add=cache.add,has=cache.has;
+    cache.evictions=0;
     // Refresh reused proofs rather than evicting frequently encountered states.
     cache.has=function(key){if(!has.call(this,key))return false;this.delete(key);add.call(this,key);return true;};
     cache.add=function(key){
       this.delete(key);add.call(this,key);
-      if(this.size>limit)this.delete(this.values().next().value);
+      if(this.size>limit){this.delete(this.values().next().value);this.evictions++;}
       return this;
     };
     return cache;
   }
   function* solveAttempt(tiles, adjacency, {
     strategyStates=120000, sectionStates=120000, sectionWidth=8, sectionRestarts=16, sectionEndgameTiles=24, sectionEndgameStates=65536, localStates=1536, planVariants=24, layoutLimit=192, bridgeStates=16384,
-    assessmentCacheEntries=2048, failedCacheEntries=500000, solutionCacheEntries=512, planningVariant=0, moveTreeSearch=true, history=[], lookaheadStates, endgameTiles, progressive=false, stopBeforeExhaustive=false, strategyOnly=false, batchGroups=0, proofTiles=20, proofStates=16384, frontierStates=65536, commuteMoves=true
+    assessmentCacheEntries=2048, failedCacheEntries=500000, solutionCacheEntries=512, planningVariant=0, moveTreeSearch=true, history=[], lookaheadStates, endgameTiles, progressive=false, stopBeforeExhaustive=false, strategyOnly=false, batchGroups=0, proofTiles=20, proofStates=16384, frontierStates=65536, commuteMoves=true, bridgePlanning=false, bridgeWidth=8, bridgeGoalBudget=18, bridgeJobStates=96, bridgeVariants=4, bridgePathStates=256, bridgeTailStates=3000
   } = {}) {
     // Accept the old options for saved integrations; they no longer authorize
     // speculative playback or change the meaning of an unresolved position.
-    for(const [key,value] of Object.entries({assessmentCacheEntries,failedCacheEntries,solutionCacheEntries,strategyStates,sectionStates,sectionWidth,sectionRestarts,sectionEndgameTiles,sectionEndgameStates,localStates,planVariants,layoutLimit,bridgeStates,lookaheadStates,endgameTiles,batchGroups,proofTiles,proofStates,frontierStates}))
+    for(const [key,value] of Object.entries({assessmentCacheEntries,failedCacheEntries,solutionCacheEntries,strategyStates,sectionStates,sectionWidth,sectionRestarts,sectionEndgameTiles,sectionEndgameStates,localStates,planVariants,layoutLimit,bridgeStates,lookaheadStates,endgameTiles,batchGroups,proofTiles,proofStates,frontierStates,bridgeWidth,bridgeGoalBudget,bridgeJobStates,bridgeVariants,bridgePathStates,bridgeTailStates}))
       if(value!==undefined && (!Number.isSafeInteger(value)||value<0))throw new RangeError(`${key} must be a nonnegative safe integer`);
-    // Auto Play disables every move-tree search, including bounded proofs.
-    // Exhausted strategic budgets keep widening until the caller cancels.
+    // Strategic lanes skip individual-move proofs; the diagnostic lane may
+    // use them. Planning limits bound effort, not bridge length.
     if(!moveTreeSearch)strategyOnly=true;
     const graphKey=JSON.stringify(adjacency);
     if(continuation?.graph===graphKey&&(!strategyOnly||continuation.strategic)&&
@@ -770,10 +776,16 @@ function createSplashSearch() {
       const start=continuation.events.findIndex(e=>e.before.every((c,i)=>c===tiles[i])&&e.before.length===tiles.length);
       if(start>=0){for(const event of continuation.events.slice(start))yield event;return 'solved';}
     }
-    const assessments=boundedMap(assessmentCacheEntries),dead=boundedSet(failedCacheEntries),winning=boundedMap(solutionCacheEntries);
+    if(!proofMemory || proofMemory.graph!==graphKey || proofMemory.limit!==failedCacheEntries)
+      proofMemory={graph:graphKey,limit:failedCacheEntries,dead:boundedSet(failedCacheEntries)};
+    const proofCache=proofMemory;
+    const assessments=boundedMap(assessmentCacheEntries),dead=proofCache.dead,winning=boundedMap(solutionCacheEntries);
+    const retainedFailures=dead.size;
     let frontiers=[];
     let positions=0,plansTried=0;
-    const proofStats={calls:0,cacheHits:0,commuted:0,balanceRejected:0};
+
+    let proofDepth=0,proofProgress=null;
+    const proofStats={calls:0,cacheHits:0,commuted:0,balanceRejected:0,maxDepth:0,retainedFailures};
     const primary=c=>c===1||c===2||c===4;
     // Pack five 3-bit colors per UTF-16 code unit: exact, collision-free keys.
     const keyOf=b=>{let key='';for(let i=0;i<b.length;i+=5){let bits=0;for(let j=0;j<5&&i+j<b.length;j++)bits|=b[i+j]<<(j*3);key+=String.fromCharCode(bits);}return key;};
@@ -790,7 +802,8 @@ function createSplashSearch() {
       return result;
     }
     const checkpoint=(phase,goal=null,board=root)=>({type:'search',phase,positions,plansTried,
-      cacheEntries:{assessments:assessments.size,failed:dead.size,solutions:winning.size},proofStats:{...proofStats},
+      cacheEntries:{assessments:assessments.size,failed:dead.size,solutions:winning.size},proofStats:{...proofStats,failedEvictions:dead.evictions},
+      proofProgress:proofProgress&&proofDepth?{...proofProgress,depth:proofDepth}:null,
       tiles:board.map(c=>names[c]),
       objective:goal?{kind:'clear-secondary',color:names[goal.color],cells:goal.cells}:null});
     const legal=b=>moves(b,adjacency,blobs(b,adjacency));
@@ -849,6 +862,7 @@ function createSplashSearch() {
     // includes ALL already-secondary branches it touches. Actual local planning
     // below checks donors, transfer links, competing demands, and clearing order.
     // Enumeration limits mean unknown, never a proof that no layout exists.
+    let useBridgeRoutes=bridgePlanning;
     function* goals(b,budget) {
       const {allBlobs,reservations}=assessment(b);
       const profiles=secondaryRegions(b,adjacency,allBlobs,reservations),seen=new Set();
@@ -861,10 +875,58 @@ function createSplashSearch() {
         }
         for(const blob of allBlobs)if(primary(b[blob[0]])&&(b[blob[0]]&color)) {
           const region=profile.byCell[blob[0]];if(!region)continue;
-          if(!moveTreeSearch||blob.length<=6)seeds.push({color,cells:blob,region,anchor:false});
+          seeds.push({color,cells:blob,region,anchor:false});
           if(blob.length>1)for(const cell of blob)seeds.push({color,cells:[cell],region,anchor:false});
         }
       }
+      // Plan donor routes to each distinct complementary supply, not only
+      // the closest one. The whole path is retained until it can be cleared.
+      if(useBridgeRoutes){const routes=[];
+      for(const [color,profile] of profiles)for(const region of profile.regions){
+        const allowed=new Set(region.cells);
+        for(const supply of region.supplierBlobs){
+          const supplySet=new Set(supply),distance=new Map(),queue=[];
+          for(const i of region.cells)if(adjacency[i].some(j=>supplySet.has(j))){distance.set(i,0);queue.push(i);}
+          for(const i of queue)for(const j of adjacency[i])if(allowed.has(j)&&!distance.has(j)){distance.set(j,distance.get(i)+1);queue.push(j);}
+          for(const start of region.cells){
+            if(!distance.has(start))continue;
+            const paths=[[start]];let pathsTried=0;
+            while(paths.length&&pathsTried++<bridgePathStates){
+            if(budget.left--<=0)return;
+            positions++;if((positions&127)===1)yield checkpoint('bridge-planning',null,b);
+            const cells=paths.pop(),i=cells[cells.length-1];
+            if(distance.get(i)>0){for(const j of adjacency[i])if(distance.get(j)===distance.get(i)-1)paths.push([...cells,j]);continue;}
+            const closure=[...cells];const chosen=new Set(closure);
+            for(const x of closure)for(const j of adjacency[x])if(b[j]===color&&!chosen.has(j)){chosen.add(j);closure.push(j);}
+            const list=[...chosen].sort((a,c)=>a-c),key=`${color}:${list}`;
+            if(seen.has(key)||list.length>region.suppliers.length||list.length<2)continue;
+            const owner=new Map(allBlobs.flatMap(blob=>blob.map(i=>[i,blob])));
+            let deficit=0;
+            for(const blob of allBlobs)if(primary(b[blob[0]])&&(b[blob[0]]&color)&&
+              (blob.includes(start)||blob.some(i=>adjacency[i].includes(start)))){
+              const donors=new Set(blob.flatMap(i=>adjacency[i]).filter(i=>b[i]===(7^color)).flatMap(i=>owner.get(i)));
+              deficit=Math.max(deficit,blob.length-donors.size);
+            }
+            const available=list.filter(i=>b[i]!==color).map(i=>{
+              const blob=allBlobs.find(g=>g.includes(i)),needed=color^b[i];
+              return [...new Set(blob.flatMap(j=>adjacency[j]).filter(j=>b[j]===needed).flatMap(j=>allBlobs.find(g=>g.includes(j))))].filter(j=>!chosen.has(j)&&!reservations.has(j));
+            });
+            const assignments=new Map();
+            const assign=(k,used)=>available[k].some(i=>{if(used.has(i))return false;used.add(i);if(!assignments.has(i)||assign(assignments.get(i),used)){assignments.set(i,k);return true;}return false;});
+            if(!available.every((_,k)=>assign(k,new Set())))continue;
+            seen.add(key);routes.push({color,cells:list,anchors:list.filter(i=>b[i]===color),score:deficit*100+supply.length*2+list.length*(deficit>0?1:-1)});
+            }
+          }
+        }
+      }
+      routes.sort((a,c)=>c.score-a.score);
+      const colors=[6,5,3],offset=planningVariant%colors.length;
+      const routeQueues=[...colors.slice(offset),...colors.slice(0,offset)].map(color=>{
+        const queue=routes.filter(route=>route.color===color);
+        if(queue.length){const shift=Math.floor(planningVariant/3)%queue.length;queue.push(...queue.splice(0,shift));}
+        return queue;
+      });
+      while(routeQueues.some(q=>q.length))for(const queue of routeQueues)if(queue.length){if(budget.left--<=0)return;yield queue.shift();}}
       const slack=seed=>seed.region.supplierBlobs.filter(blob=>blob.some(i=>adjacency[i].some(j=>seed.cells.includes(j))))
         .reduce((n,blob)=>n+blob.length,0)-seed.cells.length;
       // A group without a current clearing connection needs its bridge before
@@ -906,9 +968,8 @@ function createSplashSearch() {
             if(available.every((_,k)=>assign(k,new Set())))
               yield {color:seed.color,cells:list,anchors:list.filter(i=>b[i]===seed.color)};
           }
-          // Prefer the shortest extensions; no bound here excludes a legal
-          // solution from the complete fallback. Keep construction manageable.
-          if(donors.length>=6)continue;
+          // Layout size is limited by available tiles and donors, never by
+          // a fixed number of bridge cells. The caller bounds planning work.
           const boundary=[...new Set(list.flatMap(i=>adjacency[i]))]
             .filter(i=>allowed.has(i)&&!cells.has(i));
           for(const i of boundary)queue.push([...list,i]);
@@ -916,8 +977,9 @@ function createSplashSearch() {
       }
     }
 
-    // Build first, then clear. A completed plan has an executable sequence,
-    // not merely a matching or a path through hypothetical future colors.
+    // A goal is a bridge to build and eventually clear, not a fixed color
+    // phase. Interacting planning may clear built cells early and insert
+    // other-color jobs while the remaining bridge still provides access.
     function* localPlans(b,goal,budget,backdrop=b) {
       const active=b.flatMap((c,i)=>c?[i]:[]);
       const snapshot=current=>{const full=backdrop.slice();for(const i of active)full[i]=current[i];return full;};
@@ -934,31 +996,88 @@ function createSplashSearch() {
           return;
         }
         const building=goal.cells.some(i=>current[i]&&current[i]!==goal.color);
+        const currentBlobs=blobs(current,adjacency),currentOwner=new Map(currentBlobs.flatMap(g=>g.map(i=>[i,g])));
+        const pending=goal.cells.filter(i=>current[i]&&current[i]!==goal.color);
+        const mixDonors=new Map(pending.map(i=>[i,[...new Set(currentOwner.get(i).flatMap(j=>adjacency[j]).filter(j=>current[j]===(goal.color^current[i])).flatMap(j=>currentOwner.get(j)))].filter(j=>!members.has(j))]));
+        if(bridgePlanning&&building){const assigned=new Map();const assign=(i,seen)=>mixDonors.get(i).some(j=>{if(seen.has(j))return false;seen.add(j);if(!assigned.has(j)||assign(assigned.get(j),seen)){assigned.set(j,i);return true;}return false;});if(!pending.every(i=>assign(i,new Set())))return;}
         let candidates=legal(current).filter(m=>{
           const combined=current[m.source]|current[m.target];
-          if(building)return combined===goal.color&&members.has(m.target)&&!members.has(m.source);
+          if(building){
+            if(combined===goal.color&&members.has(m.target)&&!members.has(m.source))return true;
+            if(!bridgePlanning)return false;
+          }
           return combined===7&&((members.has(m.source)&&current[m.source]===goal.color)||
             (members.has(m.target)&&current[m.target]===goal.color));
         });
-        // Peripheral members first tends to retain clearing contacts. Every
-        // legal order remains available to this bounded local plan search.
-        if(building)candidates.sort((a,c)=>{
-          // Convert boundary cells first so remaining primaries can still
-          // reach their donors through their original connected blob.
+        // Scarce donors and bridge articulation cells are worth keeping.
+        // Score once per candidate; sorting must not rebuild all blobs.
+        if(building){
           const degree=m=>adjacency[m.target].filter(i=>members.has(i)&&current[i]===current[m.target]).length;
-          return degree(a)-degree(c);
-        });
-        if(!building)candidates.sort((a,c)=>{
+          const costs=new Map();
+          if(bridgePlanning)for(const m of candidates){
+            if((current[m.source]|current[m.target])===7)continue;
+            const remaining=pending.filter(i=>i!==m.target);
+            const shared=remaining.filter(i=>adjacency[m.source].includes(i)).length;
+            const boundary=adjacency[m.source].filter(i=>current[i]&&current[i]!==current[m.source]&&!members.has(i)).length;
+            const donorBlob=currentOwner.get(m.source);
+            const critical=[1,2,4].filter(bit=>bit!==current[m.source]).some(bit=>
+              new Set(donorBlob.flatMap(i=>adjacency[i]).filter(i=>current[i]===bit).flatMap(i=>currentOwner.get(i))).size<donorBlob.length);
+            const remote=adjacency[m.source].includes(m.target)?0:1;
+            costs.set(m,shared*1000+donorBlob.length*30+(critical?boundary*10+remote:remote*100+boundary));
+          }
+          candidates.sort((a,c)=>{
+            if(!bridgePlanning)return degree(a)-degree(c);
+            const mixing=m=>(current[m.source]|current[m.target])!==7;
+            if(!mixing(a)||!mixing(c))return Number(mixing(c))-Number(mixing(a));
+            return mixDonors.get(a.target).length-mixDonors.get(c.target).length||degree(a)-degree(c)||costs.get(a)-costs.get(c);
+          });
+        }else{
           const degree=m=>adjacency[current[m.source]===goal.color?m.source:m.target]
             .filter(i=>members.has(i)&&current[i]).length;
-          return degree(a)-degree(c);
-        });
+          const costs=new Map();
+          if(bridgePlanning)for(const m of candidates){
+            const after=m.next,bs=blobs(after,adjacency),owner=new Map(bs.flatMap(g=>g.map(i=>[i,g])));
+            const supplies=new Set();
+            const bridges=bs.filter(g=>after[g[0]]===goal.color&&g.some(i=>members.has(i)));
+            for(const group of bridges)for(const i of group)for(const j of adjacency[i])
+              if(after[j]===(7^goal.color))for(const k of owner.get(j))supplies.add(k);
+            const donor=current[m.source]===goal.color?m.target:m.source,donorBlob=currentOwner.get(donor);
+            const donorDegree=adjacency[donor].filter(j=>current[j]===current[donor]).length;
+            costs.set(m,bridges.length*10000-supplies.size*100+1000/donorBlob.length+donorDegree);
+          }
+          candidates.sort((a,c)=>(bridgePlanning?costs.get(a)-costs.get(c):0)||degree(a)-degree(c));
+        }
         for(const move of candidates) {
-          const donor=building?move.source:current[move.source]===(7^goal.color)?move.source:move.target;
-          const receiver=building?move.target:members.has(move.source)?move.source:move.target;
-          const resource={tile:donor,receiver,role:building?'mix':'clear',step:path.length+1};
+          const mixing=(current[move.source]|current[move.target])!==7;
+          const donor=mixing?move.source:current[move.source]===(7^goal.color)?move.source:move.target;
+          const receiver=mixing?move.target:members.has(move.source)?move.source:move.target;
+          const resource={tile:donor,receiver,role:mixing?'mix':'clear',step:path.length+1};
           yield* visit(move.next,[...path,{source:move.source,target:move.target}],[...resources,resource]);
           if(left<=0||budget.left<=0||count>=planVariants)return;
+        }
+        // Clear outside material while keeping this bridge alive. A helper
+        // may use any other color and must finish a legal one- or two-move
+        // clearance; every intermediate board is checked independently.
+        if(bridgePlanning){
+          const helperSuppliers=new Set();
+          for(const group of currentBlobs)if(current[group[0]]===goal.color&&group.some(i=>members.has(i)))
+            for(const i of group)for(const j of adjacency[i])if(current[j]===(7^goal.color))for(const k of currentOwner.get(j))helperSuppliers.add(k);
+          for(const move of legal(current)){
+            if(!helperSuppliers.has(move.source)&&!helperSuppliers.has(move.target))continue;
+            if(members.has(move.source)||members.has(move.target))continue;
+            const mixed=current[move.source]|current[move.target];
+            const helpers=mixed===7?[[move]]:legal(move.next).filter(m=>
+              !members.has(m.source)&&!members.has(m.target)&&
+              (m.source===move.target||m.target===move.target)&&
+              (move.next[m.source]|move.next[m.target])===7).map(m=>[move,m]);
+            for(const helper of helpers){
+              if(helper.some(m=>assessment(m.next).reason))continue;
+              const moves=helper.map(m=>({source:m.source,target:m.target}));
+              const helperResources=helper.map((m,k)=>({tile:m.source,receiver:m.target,role:'helper',step:path.length+k+1}));
+              yield* visit(helper[helper.length-1].next,[...path,...moves],[...resources,...helperResources]);
+              if(left<=0||budget.left<=0||count>=planVariants)return;
+            }
+          }
         }
       }
       yield* visit(b,[],[]);
@@ -1107,6 +1226,46 @@ function createSplashSearch() {
       return null;
     }
 
+    function* bridgeBeam(start) {
+      let frontier=[{board:start,plans:[],score:0}];
+      const visited=boundedSet(10000);
+      for(let depth=0;frontier.length&&depth<start.filter(Boolean).length;depth++){
+        const next=boundedMap(8192);
+        for(const node of frontier){
+          let goalsTried=0;
+          for(const goal of goals(node.board,{left:100000})){
+            if(goal.type==='search'){yield goal;continue;}
+            if(goalsTried++>=bridgeGoalBudget)break;
+            const budget={left:bridgeJobStates};let produced=0;
+            for(const plan of localPlans(node.board,goal,budget)){
+              if(plan.type==='search'){yield plan;continue;}
+              const key=keyOf(plan.next);if(visited.has(key)||next.has(key))continue;
+              const plans=[...node.plans,plan];
+              if(plan.next.every(c=>!c))return plans;
+              if(plan.next.filter(Boolean).length<=36){
+                useBridgeRoutes=false;
+                try{const tail=yield* sectionPlans(plan.next,{left:bridgeTailStates},1);if(tail!==null)return [...plans,...tail];}
+                finally{useBridgeRoutes=bridgePlanning;}
+              }
+              const components=parts(plan.next),bs=blobs(plan.next,adjacency);
+              let work=node.board,mixCost=0;
+              for(const move of plan.moves){const mixed=work[move.source]|work[move.target];if(mixed!==7){const donor=blobs(work,adjacency).find(g=>g.includes(move.source));mixCost+=donor.length+(adjacency[move.source].includes(move.target)?0:2);}work=stepBoard(work,move);}
+              const constructionCost=(node.constructionCost||0)+mixCost;
+              const helperMoves=plans.reduce((n,p)=>n+Math.max(0,p.moves.length-2*p.goal.cells.length),0);
+              const score=-plan.next.filter(Boolean).length*1000-helperMoves*1500-constructionCost*20-components.length*10+
+                bs.reduce((n,g)=>n+g.length*g.length,0);
+              next.set(key,{board:plan.next,plans,score,constructionCost});
+              if(++produced>=bridgeVariants)break;
+            }
+          }
+        }
+        frontier=[...next.values()].sort((a,c)=>c.score-a.score).slice(0,bridgeWidth);
+        for(const node of frontier)visited.add(keyOf(node.board));
+        yield {...checkpoint('bridge-planning',null,frontier[0]?.board||start),bridgeDepth:depth+1,bridgeCandidates:next.size,
+          message:`Planning interacting bridges: ${depth+1} clearances, ${next.size} candidate continuations.`};
+      }
+      return null;
+    }
     function* strategic(b,budget,tried,prefix=[],completeOnly=false) {
       if(b.every(c=>!c))return [];
       if(budget.left<=0)return null;
@@ -1123,7 +1282,7 @@ function createSplashSearch() {
       }
       if(prefix.length&&!frontiers.some(f=>f.key===key)){
         frontiers.push({key,board:b,prefix,size:b.filter(Boolean).length});
-        frontiers.sort((a,c)=>a.size-c.size);frontiers=frontiers.slice(0,8);
+        frontiers.sort((a,c)=>a.size-c.size);frontiers=frontiers.slice(0,bridgeWidth);
       }
       // Finish independent components separately; their resources cannot mix.
       const components=parts(b),active=isolated(b,components[0]);
@@ -1148,53 +1307,70 @@ function createSplashSearch() {
     // structural obstruction enters dead. Unknown planning results never do.
     // Failed branches have no forward/backtrack events and cannot reach the UI.
     function* exact(b,budget=null,sleep=[]) {
-      proofStats.calls++;
-      if(!moveTreeSearch)throw new Error('Move-tree search is disabled');
-      if(b.every(c=>!c))return [];
-      const key=keyOf(b);if(dead.has(key)){proofStats.cacheHits++;return null;}
-      if(winning.has(key))return winning.get(key);
-      if(budget&&budget.left--<=0)return undefined; // Unknown, never a dead state.
-      // Yield even if every successor fails its structural check. A large
-      // run of rejected candidates must not starve Stop or the deadline.
-      positions++;if((positions&15)===1)yield checkpoint('verification',null,b);
-      if(assessment(b).reason){dead.add(key);return null;}
-      const components=parts(b);
-      if(components.length>1) {
-        const path=[];
-        for(const component of components){
-          const found=yield* exact(isolated(b,component),budget);
-          if(found===undefined)return undefined;
-          if(found===null){dead.add(key);return null;}path.push(...found);
+      if(proofDepth===0){
+        proofProgress=budget?null:{completed:0,total:0,kind:'moves'};
+        if(!budget)proofCache.root=JSON.stringify(b);
+      }
+      proofDepth++;proofStats.maxDepth=Math.max(proofStats.maxDepth,proofDepth);
+      try {
+        proofStats.calls++;
+        if(!moveTreeSearch)throw new Error('Move-tree search is disabled');
+        if(b.every(c=>!c))return [];
+        const key=keyOf(b);if(dead.has(key)){proofStats.cacheHits++;return null;}
+        if(winning.has(key))return winning.get(key);
+        if(budget&&budget.left--<=0)return undefined; // Unknown, never a dead state.
+        // Yield even if every successor fails its structural check. A large
+        // run of rejected candidates must not starve Stop or the deadline.
+        positions++;if((positions&15)===1)yield checkpoint('verification',null,b);
+        if(assessment(b).reason){dead.add(key);return null;}
+        const components=parts(b);
+        if(components.length>1) {
+          const path=[];
+          if(proofDepth===1&&proofProgress){proofProgress.total=components.length;proofProgress.kind='components';}
+          let componentIndex=0;
+          for(const component of components){
+            if(proofDepth===1&&proofProgress)proofProgress.completed=componentIndex++;
+            const found=yield* exact(isolated(b,component),budget);
+            if(found===undefined)return undefined;
+            if(found===null){dead.add(key);return null;}path.push(...found);
+          }
+          winning.set(key,path);return path;
         }
-        winning.set(key,path);return path;
-      }
-      const {reservations,allBlobs}=assessment(b);
-      const owner=new Map(allBlobs.flatMap(blob=>blob.map(i=>[i,blob])));
-      // A move depends on both complete blobs and their boundary cells. Disjoint
-      // dependencies guarantee that either order stays legal and reaches the
-      // same board, including nonlocal transfers within linked blobs.
-      const describe=move=>{const cells=new Set([...owner.get(move.source),...owner.get(move.target)]);
-        const boundary=new Set([...cells].flatMap(i=>adjacency[i]));
-        return {...move,id:`${move.source}:${move.target}`,cells,boundary};};
-      const independent=(a,c)=>![...a.cells].some(i=>c.cells.has(i)||c.boundary.has(i))&&
-        ![...c.cells].some(i=>a.boundary.has(i));
-      const earlier=[];
-      for(const candidate of legal(b)) {
-        const move=describe(candidate);
-        if(commuteMoves&&sleep.some(old=>old.id===move.id)){proofStats.commuted++;continue;}
-        if(primary(b[move.source])&&reservations.has(move.source))continue;
-        const required=reservations.get(move.target);
-        if(required&&primary(b[move.target])&&move.next[move.target]!==required.secondary)continue;
-        if(!balancedComponents(move.next,adjacency)){proofStats.balanceRejected++;continue;}
-        const nextSleep=commuteMoves?[...sleep,...earlier].filter(old=>independent(old,move)):[];
-        const rest=yield* exact(move.next,budget,nextSleep);
-        if(rest===undefined)return undefined;
-        if(rest!==null){const path=[{source:move.source,target:move.target},...rest];winning.set(key,path);return path;}
-        earlier.push(move);
-      }
-      // Sleep-set failure is relative to earlier explored orders, not a proof
-      // about this board in isolation. Never publish it to the global cache.
-      if(!sleep.length)dead.add(key);return null;
+        const {reservations,allBlobs}=assessment(b);
+        const owner=new Map(allBlobs.flatMap(blob=>blob.map(i=>[i,blob])));
+        // A move depends on both complete blobs and their boundary cells. Disjoint
+        // dependencies guarantee that either order stays legal and reaches the
+        // same board, including nonlocal transfers within linked blobs.
+        const describe=move=>{const cells=new Set([...owner.get(move.source),...owner.get(move.target)]);
+          const boundary=new Set([...cells].flatMap(i=>adjacency[i]));
+          return {...move,id:`${move.source}:${move.target}`,cells,boundary};};
+        const independent=(a,c)=>![...a.cells].some(i=>c.cells.has(i)||c.boundary.has(i))&&
+          ![...c.cells].some(i=>a.boundary.has(i));
+        const earlier=[];
+        const candidates=legal(b);
+        if(proofDepth===1&&proofProgress)proofProgress.total=candidates.length;
+        let branchIndex=0;
+        for(const candidate of candidates) {
+          if(proofDepth===1&&proofProgress)proofProgress.completed=branchIndex++;
+          const move=describe(candidate);
+          if(commuteMoves&&sleep.some(old=>old.id===move.id)){proofStats.commuted++;continue;}
+          if(primary(b[move.source])&&reservations.has(move.source))continue;
+          const required=reservations.get(move.target);
+          if(required&&primary(b[move.target])&&move.next[move.target]!==required.secondary)continue;
+          if(!balancedComponents(move.next,adjacency)){proofStats.balanceRejected++;continue;}
+          const nextSleep=commuteMoves?[...sleep,...earlier].filter(old=>independent(old,move)):[];
+          const rest=yield* exact(move.next,budget,nextSleep);
+          if(rest===undefined)return undefined;
+          if(rest!==null){const path=[{source:move.source,target:move.target},...rest];winning.set(key,path);return path;}
+          earlier.push(move);
+        }
+        // Sleep-set failure is relative to earlier explored orders, not a proof
+        // about this board in isolation. Never publish it to the global cache.
+        if(proofDepth===1&&proofProgress)proofProgress.completed=proofProgress.total;
+        if(!sleep.length)dead.add(key);
+
+        return null;
+      } finally {proofDepth--;}
     }
 
     // Bounded small-position validation, never an unrestricted fallback.
@@ -1257,7 +1433,11 @@ function createSplashSearch() {
       const smallFailure=!structural&&!funding&&strategyOnly
         ? (yield* smallPositionProof(root))===false : false;
       if(structural||funding||smallFailure)dead.add(keyOf(root));
-      if(!structural&&!funding&&!smallFailure) {
+      if(bridgePlanning&&!structural&&!funding&&!smallFailure){
+        plans=yield* bridgeBeam(root);
+        if(plans===null)return 'unknown'; // A bounded planner cannot prove failure.
+      }
+      if(!bridgePlanning&&!structural&&!funding&&!smallFailure) {
         frontiers=[];
         const planningBudget={left:progressive&&!strategyOnly?Math.min(strategyStates,2048):strategyStates};
         // Retry section planning before the slower layout search. Increasing
@@ -1359,7 +1539,7 @@ function createSplashSearch() {
         const playback=[];
         for(let id=0;id<plans.length;id++) {
           const plan=plans[id],goal=plan.goal;
-          const description=goal?`Clear ${names[goal.color]} group`:'Complete verified continuation';
+          const description=goal?`Clear ${names[goal.color]} bridge${plan.resources.some(r=>r.role==='helper')?' with supporting clearances':''}`:'Complete verified continuation';
           for(let k=0;k<plan.moves.length;k++){
             const move=plan.moves[k],next=stepBoard(root,move);
             playback.push({type:'forward',sourceIndex:move.source,targetIndex:move.target,
@@ -1393,41 +1573,235 @@ function createSplashSearch() {
       root=before;
     }
   }
-  // Fast group planning first; then complete, memoized move search. No partial
-  // strategic batch is committed before its full continuation is verified.
-  function* hybridSolve(tiles,adjacency,options) {
-    const attempts=options.strategicAttempts??6, sliceMs=options.restartAfterMs??60000;
-    if(!Number.isSafeInteger(attempts)||attempts<0||!Number.isFinite(sliceMs)||sliceMs<=0)
-      throw new RangeError('Invalid hybrid strategic budget');
-    for(let attempt=0;attempt<attempts;attempt++){
-      const search=solveAttempt(tiles,adjacency,{...options,moveTreeSearch:false,
-        strategyOnly:true,batchGroups:0,planningVariant:attempt,
-        sectionRestarts:options.sectionRestarts??4,
-        sectionWidth:options.sectionWidth??Math.min(32,8*2**Math.floor(attempt/2)),
-        sectionStates:options.sectionStates??120000*2**Math.floor(attempt/2)});
-      let elapsed=0;
-      try {
-        for(;;){
-          const started=Date.now(),step=search.next();elapsed+=Math.max(0,Date.now()-started);
-          if(step.done)return step.value;
-          if(step.value.type==='search'&&elapsed>=sliceMs)break;
-          yield step.value;
-        }
-      }finally{search.return();}
-      if(attempt+1<attempts)yield {type:'search',phase:'planning',restart:attempt+1,
-        tiles:tiles.slice(),message:`Trying another strategic ranking (attempt ${attempt+2}).`};
+  // Match the offline C++ solver's unsigned 64-bit ranking hash exactly.
+  // Integer pairs keep this reproducible without BigInt in the search loop.
+  function beamHighProduct(a,b) {
+    const low=(a&65535)*(b&65535);
+    const middle=(a>>>16)*(b&65535)+(a&65535)*(b>>>16)+(low>>>16);
+    return ((a>>>16)*(b>>>16)+Math.floor(middle/65536))>>>0;
+  }
+  function beamMultiply(lo,hi,a,b) {
+    return [Math.imul(lo,a)>>>0,(Math.imul(hi,a)+Math.imul(lo,b)+beamHighProduct(lo,a))>>>0];
+  }
+  function beamNoise(board,seed) {
+    let hlo=0x7f4a7c15,hhi=0x9e3779b9;
+    for(let c=1;c<7;c++){
+      const blo=(board[c*2]|((board[c*2+1]&3)<<30))>>>0,bhi=board[c*2+1]>>>2;
+      let lo=(blo+hlo)>>>0,hi=(bhi+hhi+(lo<blo?1:0))>>>0;
+      lo^=(lo>>>30)|(hi<<2);hi^=hi>>>30;
+      [lo,hi]=beamMultiply(lo,hi,0x1ce4e5b9,0xbf58476d);
+      lo^=(lo>>>27)|(hi<<5);hi^=hi>>>27;
+      [lo,hi]=beamMultiply(lo,hi,0x133111eb,0x94d049bb);
+      hlo=(hlo^lo^(lo>>>31)^(hi<<1))>>>0;hhi=(hhi^hi^(hi>>>31))>>>0;
     }
-    yield {type:'search',phase:'complete-search',tiles:tiles.slice(),
-      message:'Complete search: checking all legal continuations. No time limit; Stop cancels.'};
-    // Small section endgames remain bounded optimizations; exhaustion of the
-    // root move search is the complete proof, with failed positions memoized.
-    return yield* solveAttempt(tiles,adjacency,{...options,moveTreeSearch:true,
-      strategyOnly:false,progressive:false,stopBeforeExhaustive:false,batchGroups:0});
+    const [slo,shi]=beamMultiply(seed,0,0x7f4a7c15,0x9e3779b9);
+    let lo=(hlo^slo)>>>0,hi=(hhi^shi)>>>0;
+    lo^=hi>>>1;
+    [lo,hi]=beamMultiply(lo,hi,0xed558ccd,0xff51afd7);
+    lo=(lo^(hi>>>1))>>>0;
+    const remainder=((hi%1000000)*967296+lo)%1000000;
+    return remainder/1000000-.5;
+  }
+
+  // Bounded beam portfolio used by the offline timeout-board solver. Two
+  // 30-bit words represent each color, avoiding BigInt costs in the browser.
+  // This is a solution finder only: pruning/exhaustion never proves failure.
+  function* beamSolve(tiles, adjacency, configuration=null) {
+    const n=tiles.length;
+    if(n>60)return 'unknown';
+    if(!configuration){
+      const standard=beamSolve(tiles,adjacency,{width:256,diverse:false,seed:1,initialNoise:0,retryNoise:120});
+      const wide=beamSolve(tiles,adjacency,{width:512,diverse:false,seed:2,initialNoise:60,retryNoise:120});
+      const varied=beamSolve(tiles,adjacency,{width:64,diverse:true,seed:3,initialNoise:200,retryNoise:300});
+      const lanes=[standard,wide,varied];
+      function* finish(winner,event){for(const lane of lanes)if(lane!==winner)lane.return();yield event;return yield* winner;}
+      try{
+        // Preserve the cheap deterministic first pass. After that, wide and
+        // varied retries retain independent progress instead of queuing behind
+        // one another; neither can monopolize the caller's timeout.
+        for(;;){const step=standard.next();if(step.done)return step.value;if(step.value.type!=='search')return yield* finish(standard,step.value);yield step.value;if(step.value.restart>1)break;}
+        for(;;)for(const [lane,slice] of [[wide,25],[varied,20],[standard,5]]){
+          let work=0;
+          for(let count=0;count<512;count++){
+            const started=Date.now(),step=lane.next();work+=Math.max(0,Date.now()-started);
+            if(step.done)return step.value;
+            if(step.value.type!=='search')return yield* finish(lane,step.value);
+            yield step.value;if(work>=slice)break;
+          }
+        }
+      }finally{for(const lane of lanes)lane.return();}
+    }
+    const pop=x=>{x-=(x>>>1)&0x55555555;x=(x&0x33333333)+((x>>>2)&0x33333333);return (((x+(x>>>4))&0x0f0f0f0f)*0x01010101)>>>24;};
+    const bits=Array.from({length:n},(_,i)=>1<<(i%30));
+    const halves=Array.from({length:n},(_,i)=>i<30?0:1);
+    const edges=adjacency.map(a=>{const m=[0,0];for(const i of a)m[halves[i]]|=bits[i];return m;});
+    function neighbors(lo,hi){let a=0,b=0;while(lo){const bit=lo&-lo,i=31-Math.clz32(bit);lo^=bit;a|=edges[i][0];b|=edges[i][1];}while(hi){const bit=hi&-hi,i=61-Math.clz32(bit);hi^=bit;a|=edges[i][0];b|=edges[i][1];}return [a,b];}
+    function flood(lo,hi,allowedLo,allowedHi){for(;;){const [a,b]=neighbors(lo,hi),x=lo|(a&allowedLo),y=hi|(b&allowedHi);if(x===lo&&y===hi)return [lo,hi];lo=x;hi=y;}}
+    function colorGroups(board){const result=[];for(let c=1;c<7;c++){let lo=board[c*2],hi=board[c*2+1];while(lo||hi){const [a,b]=flood(lo?lo&-lo:0,lo?0:hi&-hi,lo,hi);lo^=a;hi^=b;const [edgeLo,edgeHi]=neighbors(a,b);result.push({lo:a,hi:b,edgeLo,edgeHi,color:c,size:pop(a)+pop(b)});}}return result;}
+    function cells(lo,hi){const out=[];while(lo){const bit=lo&-lo;out.push(31-Math.clz32(bit));lo^=bit;}while(hi){const bit=hi&-hi;out.push(61-Math.clz32(bit));hi^=bit;}return out;}
+    function occupancy(b){let lo=0,hi=0;for(let c=1;c<7;c++){lo|=b[c*2];hi|=b[c*2+1];}return [lo,hi];}
+    function viable(b,lo,hi){
+      const ingredient=[[0,0],[0,0],[0,0]];
+      for(let c=1;c<7;c++)for(let k=0;k<3;k++)if(c&(1<<k)){ingredient[k][0]|=b[c*2];ingredient[k][1]|=b[c*2+1];}
+      let leftLo=lo,leftHi=hi;
+      while(leftLo||leftHi){const [a,d]=flood(leftLo?leftLo&-leftLo:0,leftLo?0:leftHi&-leftHi,leftLo,leftHi);leftLo^=a;leftHi^=d;const totals=ingredient.map(m=>pop(a&m[0])+pop(d&m[1]));if(totals[0]!==totals[1]||totals[0]!==totals[2])return false;}
+      for(const s of [3,5,6]){
+        let remainLo=b[s*2],remainHi=b[s*2+1];if(!remainLo&&!remainHi)continue;
+        let allowedLo=0,allowedHi=0;for(let c=1;c<7;c++)if(!(c&~s)){allowedLo|=b[c*2];allowedHi|=b[c*2+1];}
+        while(remainLo||remainHi){const [a,d]=flood(remainLo?remainLo&-remainLo:0,remainLo?0:remainHi&-remainHi,allowedLo,allowedHi);remainLo&=~a;remainHi&=~d;const [e,f]=neighbors(a,d),complement=7^s;let supplyLo=e&b[complement*2],supplyHi=f&b[complement*2+1],donorLo=0,donorHi=0;
+          while(supplyLo||supplyHi){const [x,y]=flood(supplyLo?supplyLo&-supplyLo:0,supplyLo?0:supplyHi&-supplyHi,b[complement*2],b[complement*2+1]);donorLo|=x;donorHi|=y;supplyLo&=~x;supplyHi&=~y;}
+          if(pop(a&b[s*2])+pop(d&b[s*2+1])>pop(donorLo)+pop(donorHi))return false;
+        }
+      }
+      return true;
+    }
+    const key=b=>String.fromCharCode(b[2]&65535,b[2]>>>16,b[3]&65535,b[3]>>>16,b[4]&65535,b[4]>>>16,b[5]&65535,b[5]>>>16,b[6]&65535,b[6]>>>16,b[7]&65535,b[7]>>>16,b[8]&65535,b[8]>>>16,b[9]&65535,b[9]>>>16,b[10]&65535,b[10]>>>16,b[11]&65535,b[11]>>>16,b[12]&65535,b[12]>>>16,b[13]&65535,b[13]>>>16);
+    function rank(b,lo,hi,gs,diverse){let score=-45*(pop(lo)+pop(hi));for(const g of gs){score+=(diverse ? 0.5 : 2)*g.size*g.size;if(g.color===1||g.color===2||g.color===4){let a=0,d=0;for(let c=1;c<7;c++)if(!(c&g.color)){a|=b[c*2];d|=b[c*2+1];}if(!((g.edgeLo&a)||(g.edgeHi&d)))return -Infinity;}}for(const i of cells(lo,hi)){const degree=pop(edges[i][0]&lo)+pop(edges[i][1]&hi);score+=degree*2-(degree<=1?15:0);}return score;}
+    const root=Array(14).fill(0);for(let i=0;i<n;i++)root[masks[tiles[i]]*2+halves[i]]|=bits[i];root[0]=root[1]=0;
+    if(tiles.every(c=>c==='white'))return 'solved';
+    let checked=0;
+    for(let attempt=0;;attempt++){
+      const {diverse,width}=configuration,seed=configuration.seed+attempt;
+      const noise=attempt?configuration.retryNoise:configuration.initialNoise;
+      let frontier=[{board:root,parent:null}],winner=null;
+      yield {type:'search',phase:'beam-planning',tiles:tiles.slice(),positions:checked,restart:attempt+1,message:`Exploring alternative full-board continuations (beam ${width}, attempt ${attempt+1}).`};
+      // A primary mix removes one cell; a three-ingredient clearance removes
+      // two. Ingredient totals determine the required number of clearances.
+      const depthLimit=tiles.filter(c=>c!=='white').length-tiles.reduce((sum,c)=>sum+pop(masks[c]),0)/3;
+      for(let depth=0;depth<depthLimit&&!winner;depth++){
+        const seen=new Set(),retained=new Set(),heap=[];
+        // Keep only the best width candidates instead of retaining every child.
+        function keep(node){if(retained.has(node.key))return;if(heap.length<width){retained.add(node.key);heap.push(node);let i=heap.length-1;while(i){const p=(i-1)>>1;if(heap[p].score<=node.score)break;heap[i]=heap[p];i=p;}heap[i]=node;}else if(node.score>heap[0].score){retained.delete(heap[0].key);retained.add(node.key);let i=0;while(i*2+1<heap.length){let j=i*2+1;if(j+1<heap.length&&heap[j+1].score<heap[j].score)j++;if(heap[j].score>=node.score)break;heap[i]=heap[j];i=j;}heap[i]=node;}}
+        expansion: for(const parent of frontier){const gs=colorGroups(parent.board);for(let a=0;a<gs.length;a++)for(let d=a+1;d<gs.length;d++){
+          const g=gs[a],h=gs[d];if((g.color&h.color)||!((g.edgeLo&h.lo)||(g.edgeHi&h.hi)))continue;
+          for(const x of cells(g.lo,g.hi))for(const y of cells(h.lo,h.hi))for(let dir=0;dir<((g.color|h.color)===7?1:2);dir++){
+            const source=dir?y:x,target=dir?x:y,sc=dir?h.color:g.color,tc=dir?g.color:h.color,mix=sc|tc;
+            const b=parent.board.slice();b[sc*2+halves[source]]&=~bits[source];b[tc*2+halves[target]]&=~bits[target];if(mix!==7)b[mix*2+halves[target]]|=bits[target];
+            if((++checked&127)===0)yield {type:'search',phase:'beam-planning',positions:checked,depth,tiles:tiles.slice()};
+            const k=key(b);if(seen.has(k))continue;
+            // Forgetting dedup keys affects speed only, and bounds memory even
+            // on large groups with many possible source/target pairs.
+            if(seen.size<250000)seen.add(k);
+            const [lo,hi]=occupancy(b),node={board:b,parent,source,target,key:k,score:0};
+            if(!lo&&!hi){winner=node;break expansion;}
+            if(!viable(b,lo,hi))continue;
+            let score=rank(b,lo,hi,colorGroups(b),diverse);if(score===-Infinity)continue;
+            if(noise)score+=beamNoise(b,seed)*noise;
+            node.score=score;keep(node);
+          }
+          if(winner)break;
+        }if(winner)break;}
+        if(!heap.length)break;
+        frontier=heap.sort((a,b)=>b.score-a.score);
+      }
+      if(!winner)continue;
+      const path=[];for(let node=winner;node.parent;node=node.parent)path.push({source:node.source,target:node.target});path.reverse();
+      // Validate the complete plan before handing any move to the player.
+      let current=tiles.map(c=>masks[c]);const playback=[];
+      for(const [i,move] of path.entries()){
+        const gs=blobs(current,adjacency),source=gs.find(g=>g.includes(move.source)),target=new Set(gs.find(g=>g.includes(move.target)));
+        if(!current[move.source]||!current[move.target]||(current[move.source]&current[move.target])||!source.some(x=>adjacency[x].some(y=>target.has(y))))throw new Error('Invalid beam continuation');
+        const before=current.map(c=>names[c]),mix=current[move.source]|current[move.target];current[move.source]=0;current[move.target]=mix===7?0:mix;
+        playback.push({type:'forward',sourceIndex:move.source,targetIndex:move.target,before,after:current.map(c=>names[c]),plan:{id:1,kind:'verified-continuation',description:'Complete beam-search continuation',color:null,cells:[],anchors:[],resources:[],step:i+1,total:path.length,verified:true,continuationVerified:true,batchGroups:1}});
+      }
+      if(current.some(Boolean))throw new Error('Incomplete beam continuation');
+      yield* playback;return 'solved';
+    }
+  }
+
+  // Cooperative search strategies share the caller's computation deadline.
+  // Keep the successful offline beam and diagnostic strategies available
+  // alongside the two strategic planners. Only a fully verified continuation is played.
+  function* hybridSolve(tiles,adjacency,options) {
+    const quickPlanMs=options.quickPlanMs??1000;
+    if(!Number.isFinite(quickPlanMs)||quickPlanMs<0)throw new RangeError('quickPlanMs must be nonnegative and finite');
+    const legacyAttempt=variant=>solveAttempt(tiles,adjacency,{...options,
+      moveTreeSearch:false,strategyOnly:true,bridgePlanning:false,batchGroups:0,
+      planningVariant:variant,sectionRestarts:options.sectionRestarts??4});
+    function* bridgePortfolio(){
+      for(let attempt=0;;attempt++){
+        const scale=2**Math.min(3,Math.floor(attempt/3));
+        yield {type:'search',phase:'bridge-planning',restart:attempt+1,tiles:tiles.slice(),
+          message:`Planning interacting color bridges (attempt ${attempt+1}).`};
+        const search=solveAttempt(tiles,adjacency,{...options,moveTreeSearch:false,
+          strategyOnly:true,bridgePlanning:true,batchGroups:0,planningVariant:attempt,
+          bridgeWidth:options.bridgeWidth??8*scale,
+          bridgeGoalBudget:options.bridgeGoalBudget??18*scale,
+          bridgeJobStates:options.bridgeJobStates??96*scale,
+          bridgeVariants:options.bridgeVariants??4*scale,
+          bridgePathStates:options.bridgePathStates??256*scale});
+        try{
+          let step;
+          while(!(step=search.next()).done)yield step.value;
+          if(step.value!=='unknown')return step.value;
+        }finally{search.return();}
+      }
+    }
+    let legacy=legacyAttempt(0),bridges=bridgePortfolio(),legacyVariant=0,legacyWork=0;
+    // Match the offline strategy that solved the latest screenshot. Partial
+    // continuations receive bounded probes; the root proof remains cooperative
+    // and is stopped by the same Auto Play timeout as every other strategy.
+    let diagnostic=options.diagnosticSearch===false?null:solveAttempt(tiles,adjacency,{
+      ...options,moveTreeSearch:true,strategyOnly:false,bridgePlanning:false,
+      progressive:false,stopBeforeExhaustive:false,batchGroups:0,
+      strategyStates:options.strategyStates??12000,
+      sectionStates:options.sectionStates??120000,
+      frontierStates:options.frontierStates??4096});
+    let beam=options.beamSearch===false?null:beamSolve(tiles,adjacency);
+    const closeOthers=winner=>{for(const search of [legacy,bridges,diagnostic,beam])if(search&&search!==winner)search.return();};
+    const advance=search=>{
+      const started=Date.now(),step=search.next();
+      return {step,work:Math.max(0,Date.now()-started)};
+    };
+    try{
+      let quickWork=0;
+      while(quickWork<quickPlanMs){
+        const {step,work}=advance(legacy);quickWork+=work;legacyWork+=work;
+        if(step.done){
+          if(step.value!=='unknown')return step.value;
+          legacy=legacyAttempt(++legacyVariant);legacyWork=0;break;
+        }
+        if(step.value.type!=='search'){
+          closeOthers(legacy);yield step.value;return yield* legacy;
+        }
+        yield step.value;
+      }
+      for(;;){
+        // Bounded execution slices retain every lane's frontier across turns. Browser
+        // scheduling and animation pauses are excluded from computation totals.
+        for(const [search,slice] of [[beam,300],[diagnostic,15],[bridges,10],[legacy,5]]){
+          if(!search)continue;
+          let work=0;
+          for(let steps=0;steps<(search===diagnostic||search===beam?512:32);steps++){
+            const result=advance(search),step=result.step;work+=result.work;
+            if(search===legacy)legacyWork+=result.work;
+            if(step.done){
+              if(step.value!=='unknown')return step.value;
+              if(search===beam)beam=null;
+              else if(search===diagnostic)diagnostic=null;
+              else if(search===legacy){legacy=legacyAttempt(++legacyVariant);legacyWork=0;}
+              break;
+            }
+            if(step.value.type!=='search'){
+              closeOthers(search);
+              yield step.value;return yield* search;
+            }
+            yield step.value;
+            if(work>=slice)break;
+          }
+        }
+        if(legacyWork>=60000){
+          legacy.return();legacy=legacyAttempt(++legacyVariant);legacyWork=0;
+          yield {type:'search',phase:'planning',tiles:tiles.slice(),
+            message:`Trying another group-planning ranking (attempt ${legacyVariant+1}); bridge planning retains its progress.`};
+        }
+      }
+    }finally{legacy.return();bridges.return();diagnostic?.return();beam?.return();}
   }
 
   // Restart strategic planning from committed tiles, retaining undo history.
   // Measure time inside next(), excluding display pauses and browser scheduling.
-  function* solve(tiles,adjacency,options={}) {
+  function* solveRun(tiles,adjacency,options={}) {
     if(options.hybrid)return yield* hybridSolve(tiles,adjacency,options);
     if(options.moveTreeSearch!==false)return yield* solveAttempt(tiles,adjacency,options);
     const restartAfterMs=options.restartAfterMs??30000;
@@ -1460,7 +1834,30 @@ function createSplashSearch() {
         message:`Restarting strategic planning: trying alternative rankings and group priorities (attempt ${attempt+1}).`};
     }
   }
-  return {solve,assess};
+  function* solve(tiles,adjacency,options={}) {
+    let finished=false;
+    try {
+      const result=yield* solveRun(tiles,adjacency,options);
+      finished=true;return result;
+    } finally {
+      // Cancellation keeps useful proofs; a concluded search releases memory.
+      if(finished)proofMemory=null;
+    }
+  }
+  // Internal transport between this page and its own worker. These snapshots
+  // contain established proofs, not user input or a saved board file.
+  function exportProofCache() {
+    return proofMemory?{graph:proofMemory.graph,limit:proofMemory.limit,root:proofMemory.root,keys:[...proofMemory.dead]}:null;
+  }
+  function restoreProofCache(snapshot) {
+    if(!snapshot)return;
+    if(typeof snapshot.graph!=='string'||!Number.isSafeInteger(snapshot.limit)||snapshot.limit<0||
+      !Array.isArray(snapshot.keys)||snapshot.keys.length>snapshot.limit||snapshot.keys.some(k=>typeof k!=='string'))
+      throw new TypeError('Invalid internal proof cache');
+    const dead=boundedSet(snapshot.limit);for(const key of snapshot.keys)dead.add(key);
+    proofMemory={graph:snapshot.graph,limit:snapshot.limit,root:snapshot.root,dead};
+  }
+  return {solve,assess,exportProofCache,restoreProofCache};
 }
 const SplashSearch = createSplashSearch();
 if (typeof module !== 'undefined') module.exports = SplashSearch;

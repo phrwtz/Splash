@@ -1,0 +1,11 @@
+const assert=require('node:assert/strict'),{solve}=require('../search.js');
+const board=['red','red','red','blue','blue','blue','yellow','yellow','yellow'];
+const adj=[[1,6],[0,2],[1,3],[2,4],[3,5],[4],[0,7],[6,8],[7]];
+const g=solve(board,adj,{moveTreeSearch:false,batchGroups:6}),events=[];let s;
+while(!(s=g.next()).done)if(s.value.type==='forward')events.push(s.value);
+assert.equal(s.value,'solved');assert.equal(events.length,6);
+const plan=events[0].plan;assert.equal(plan.cells.length,3);
+assert.deepEqual(plan.resources.map(r=>r.role),['mix','mix','mix','clear','clear','clear']);
+const color=plan.color;assert.equal(events[2].after.filter(c=>c===color).length,3);
+assert(events.at(-1).after.every(c=>c==='white'));
+console.log('Passed whole-group conversion, retained complementary contact, and whole-group clearance without move-tree search.');

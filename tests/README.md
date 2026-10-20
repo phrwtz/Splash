@@ -1,3 +1,104 @@
+# Current Auto Play policy — timeout-board beam search
+
+Auto Play includes the beam-search strategy developed for the October 20 batch
+of timed-out boards. It ranks alternative full-board continuations, supports
+interleaved colors and transfers across touching groups, and retries using
+widths 256, 512, and 64 with the same seeded 64-bit rankings and group weights
+as the offline solver. After the initial deterministic pass, the wide and
+varied beams retain their progress and run cooperatively, alongside standard
+retries. Retained candidates are deduplicated even when the layer deduplication
+cache reaches its memory limit.
+Only a complete, independently revalidated continuation is played.
+
+The frontier and deduplication memory are bounded. Beam exhaustion is inconclusive;
+this lane never declares a board unsolvable. All lanes share the selected search
+computation timeout (five minutes by default), yield for cancellation, and run
+inside the existing worker or cooperative page fallback. No native runtime,
+server, stored opening, or saved solution is required.
+
+Run `node tests/beam-search.cjs` for partial/mixed positions, both bitset halves,
+Stop/cancellation, input isolation, and 2,500 exact offline ranking comparisons. `node tests/timeout-beam.cjs` solves and
+independently replays the 24 original timed-out deals solved offline, using the
+normal Auto Play portfolio and its default five-minute computation budget.
+It runs two boards concurrently (override with `SPLASH_TEST_JOBS`); pass
+comma-separated board IDs to run a subset.
+Fixtures contain original colors only. The bridge and diagnostic unit tests
+explicitly disable the beam lane when checking those other strategies in isolation.
+`node tests/timeout-beam-browser.cjs` exercises the actual Auto Play worker,
+UI move replay, foreground fallback, Stop, and a custom timeout/archive download.
+Browser tests accept PLAYWRIGHT_PATH and PLAYWRIGHT_EXECUTABLE_PATH.
+
+Earlier policies below are historical.
+
+---
+
+# Current Auto Play policy — shared diagnostic strategy
+
+Auto Play now runs the successful offline diagnostic configuration alongside
+the group and interacting-bridge planners. All three retain their progress
+between computation slices and share the user-selected computation timeout.
+Only the first fully verified solution is played; Stop and timeout close all
+searches, including diagnostic proof search. A timeout remains inconclusive.
+
+`diagnostic-board.cjs` stores only the latest screenshot's original deal.
+`diagnostic-autoplay.cjs` and `diagnostic-autoplay-browser.cjs` exercise default
+Auto Play, independent move replay, real worker execution, Stop, and the chosen
+timeout. The bridge-specific tests explicitly disable diagnostic search to
+continue testing larger bridges and interleaved colors in isolation.
+
+Earlier policies below are historical.
+
+---
+
+# Current Auto Play policy — October 19
+
+Auto Play gives quick clearances a short head start, then keeps that planner
+running cooperatively alongside bounded planning of interacting color bridges.
+Both retain their progress between computation slices; only the winning verified
+continuation is played. Auto Play never invokes complete individual-move search
+or bounded exact endgame proofs. The lower-level offline solver API still supports those proof tools.
+
+Bridge layouts have no fixed cell-count cutoff. Shortest donor routes include
+alternative paths to distant supply blobs. Distinct donor matching protects
+future conversions; scoring preserves scarce supplies and useful bridge links.
+A bridge may be partially cleared before construction finishes, and other-color
+clearance jobs can run while it remains active. A bounded frontier retains
+alternative full-board plans; exhaustion retries different routes and wider
+frontiers, not an exhaustive fallback. The group-planning lane also changes
+rankings after 60 seconds of its own computation without resetting bridge work.
+Timeouts remain inconclusive, honor the chosen minutes limit, and save the original
+deal. Existing sound structural contradictions can still prove impossibility.
+
+Run `node tests/interacting-bridges.cjs` and
+`node tests/interacting-bridges-browser.cjs` for the corrected 1,000-minute board,
+a seven-cell construction, interleaved color jobs, rotated/reflected boards,
+guarded exclusion of exact search, independent legal
+replay, a real hidden-tab worker, and Stop. The board fixture contains only the
+original deal, with no opening or solution. Browser tests accept
+PLAYWRIGHT_PATH and PLAYWRIGHT_EXECUTABLE_PATH for existing installations.
+`node tests/start-autoplay-browser.cjs` and `node tests/file-timeouts-browser.cjs`
+cover fresh deals and timeout saving; `node tests/search.cjs` and the offline
+proof tests still exercise the lower-level solver API.
+
+All earlier Auto Play policies below are historical, including tests that
+explicitly expect an unlimited complete-search phase or forced serial color jobs.
+
+---
+
+Complete search reports completed initial branches, their total, current recursion
+depth, and failed-cache evictions. Branch counts are not a percentage of work or
+an ETA: subtree sizes can differ enormously. `proof-progress.cjs` checks these
+counters, cancellation, graph isolation, and cache transport to a fresh solver.
+
+Stop/Start retains established failures in memory. Workers copy a bounded proof
+snapshot to the page every 30 seconds; restarting the same proof board restores
+that cache and skips the six strategic attempts. This resumes with cached
+results, not the exact DFS stack, and can lose work since the last snapshot.
+Reloading or closing the page discards the cache. Completed searches release it.
+`proof-progress-browser.cjs` verifies snapshot transport and reuse with a real
+worker, the progress display, and Stop. Set PLAYWRIGHT_EXECUTABLE_PATH to an
+installed Chromium/Chrome executable if needed.
+
 Complete proofs now use collision-free packed board keys (five colors per
 UTF-16 code unit), retain up to 500,000 failed states, and refresh reused states.
 Exact search uses conservative sleep sets to omit commuting move orders: the
@@ -560,3 +661,27 @@ also solves this board without another solver change.
 and verifies cancellation without changing the original tiles. Run the UI
 check with `SECTION_FIXTURE=./early-endgame-two.cjs node
 tests/section-browser.cjs` using the existing Playwright environment variables.
+
+
+October 15: Auto Play again limits each board to 300,000 ms of solver computation
+(animation/display pauses excluded). Timeouts increment the visible Timed out
+count, save the original deal, and advance. They are never impossibility proofs.
+Before starting, Create board archive or Open board archive chooses a local JSON
+file. Chrome/Edge file access on localhost/HTTPS is required. Reopen that same
+file next session for replay and further automatic saves. Legacy browser entries
+are migrated into the chosen archive; new entries are no longer stored there.
+Writes finish before advancing; a failed write stops Auto Play and leaves the
+board available in the current page for a retry by choosing an archive.
+Run `node tests/file-timeouts-browser.cjs` for mocked file-access coverage of the
+cutoff, counters, continuation, Stop, archive reopening, replay, and disk errors.
+Older unlimited-search and browser-storage timeout tests describe superseded behavior.
+
+October 15 startup correction: Start Auto Play immediately deals a fresh random
+board and starts the selected mode, without archive selection. Archive controls
+are only in Saved boards. Without a connected archive, each saved outcome
+downloads a complete JSON archive to the browser's downloads location; Open
+board archive in Saved boards retrieves earlier sessions and connects a file
+for subsequent writes. Browser download preferences may ask for a location or
+permission for multiple downloads. `node tests/start-autoplay-browser.cjs` tests
+the actual Start buttons, no picker calls, downloaded JSON content after a
+timeout, the Saved boards list/replay, and starting fresh after replay.

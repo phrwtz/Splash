@@ -187,6 +187,68 @@ const selectedTimedOutBoards = new Set();
 let timedOutSelectionAnchor = null;
 let loadingTimedOutBoard = false;
 
+const AUTO_PLAY_SEARCH_MS = 5 * 60 * 1000;
+let savedBoardsFile = null;
+let archiveWrites = Promise.resolve();
+
+function writeBoardArchive() {
+  const contents = JSON.stringify({format: 'splash-boards-v1', boards: savedTimedOutBoards}, null, 2);
+  if (!savedBoardsFile) {
+    // A static page cannot silently overwrite arbitrary files. Save a portable
+    // archive to Downloads without making Auto Play depend on a file picker.
+    const url = URL.createObjectURL(new Blob([contents], {type:'application/json'}));
+    const link = document.createElement('a');
+    link.href = url; link.download = 'splash-saved-boards.json';
+    document.body.append(link); link.click(); link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return Promise.resolve();
+  }
+  const write = archiveWrites.catch(() => {}).then(async () => {
+    const stream = await savedBoardsFile.createWritable();
+    try { await stream.write(contents); await stream.close(); }
+    catch (error) { await stream.abort().catch(() => {}); throw error; }
+  });
+  archiveWrites = write;
+  return write;
+}
+
+async function chooseBoardArchive(existing) {
+  try {
+    if (!window.showSaveFilePicker || !window.showOpenFilePicker) {
+      throw new Error('Automatic local-file saving requires Chrome or Edge on localhost or HTTPS.');
+    }
+    const options = {types: [{description: 'Splash board archive', accept: {'application/json': ['.json']}}]};
+    const handle = existing ? (await window.showOpenFilePicker(options))[0] :
+      await window.showSaveFilePicker({...options, suggestedName: 'splash-saved-boards.json'});
+    let entries = [];
+    if (existing) {
+      const data = JSON.parse(await (await handle.getFile()).text());
+      entries = Array.isArray(data) ? data : data.boards;
+      if (!Array.isArray(entries) || entries.some(entry => !entry || !Number.isFinite(entry.savedAt) ||
+          !Array.isArray(entry.tiles) || entry.tiles.length !== state.tiles.length ||
+          entry.tiles.some(color => !['white','red','blue','yellow','purple','orange','green'].includes(color)))) {
+        throw new Error('This file is not a valid Splash board archive.');
+      }
+      if (await handle.requestPermission({mode:'readwrite'}) !== 'granted') throw new Error('Write permission is needed to save new boards.');
+    }
+    // Include legacy browser saves once, so choosing a file preserves old boards.
+    const merged = [...entries];
+    for (const entry of savedTimedOutBoards) {
+      if (!merged.some(other => other.savedAt === entry.savedAt && JSON.stringify(other.tiles) === JSON.stringify(entry.tiles))) merged.push(entry);
+    }
+    savedBoardsFile = handle;
+    savedTimedOutBoards = merged.sort((a,b) => b.savedAt-a.savedAt);
+    selectedTimedOutBoards.clear();
+    await writeBoardArchive();
+    savedTimeoutStorageWarning = '';
+  } catch (error) {
+    if (error.name === 'AbortError') return;
+    savedBoardsFile = null;
+    savedTimeoutStorageWarning = error.message;
+  }
+  renderSavedTimedOutBoards();
+}
+
 function readSavedTimedOutBoards() {
   try {
     const entries = JSON.parse(localStorage.getItem(SAVED_TIMEOUTS_KEY) || '[]');
@@ -203,13 +265,14 @@ function readSavedTimedOutBoards() {
 function saveTimedOutBoard(outcome = 'timed-out') {
   // Store the original deal, including cells cleared before Auto Play started.
   savedTimedOutBoards.unshift({savedAt: Date.now(), outcome, tiles: [...state.initialTiles]});
-  try {
-    localStorage.setItem(SAVED_TIMEOUTS_KEY, JSON.stringify(savedTimedOutBoards));
-    savedTimeoutStorageWarning = '';
-  } catch (error) {
-    savedTimeoutStorageWarning = 'Browser storage is unavailable or full. Newly saved boards are available during this visit only.';
-  }
+  const saving = writeBoardArchive();
+  saving.catch(error => {
+    savedTimeoutStorageWarning = `File save failed: ${error.message}. Keep this page open and choose an archive to retry.`;
+    autoPlayState.stopRequested = true;
+    renderSavedTimedOutBoards();
+  });
   renderSavedTimedOutBoards();
+  return saving;
 }
 
 function renderSavedTimedOutBoards() {
@@ -218,7 +281,7 @@ function renderSavedTimedOutBoards() {
   const dialog = document.getElementById('saved-timeouts-dialog');
   if (!dialog?.open) return;
   document.getElementById('saved-timeouts-storage').textContent = savedTimeoutStorageWarning ||
-    'Saved in this browser, including after you close the page.';
+    (savedBoardsFile ? `Saved to local file: ${savedBoardsFile.name}` : 'New saved boards download as a JSON archive. Open an archive here to retrieve boards from earlier sessions or keep updating the same file.');
   const list = document.getElementById('saved-timeouts-list');
   list.replaceChildren();
   if (!savedTimedOutBoards.length) {
@@ -284,12 +347,10 @@ function clearSelectedTimedOutBoards() {
   if (loadingTimedOutBoard || !selectedTimedOutBoards.size) return;
   savedTimedOutBoards = savedTimedOutBoards.filter(entry => !selectedTimedOutBoards.has(entry));
   selectedTimedOutBoards.clear(); timedOutSelectionAnchor = null;
-  try {
-    localStorage.setItem(SAVED_TIMEOUTS_KEY, JSON.stringify(savedTimedOutBoards));
-    savedTimeoutStorageWarning = '';
-  } catch (error) {
-    savedTimeoutStorageWarning = 'Cleared for this visit only. Browser storage could not be updated.';
-  }
+  writeBoardArchive().catch(error => {
+    savedTimeoutStorageWarning = `Could not update the archive: ${error.message}`;
+    renderSavedTimedOutBoards();
+  });
   renderSavedTimedOutBoards();
 }
 
@@ -381,6 +442,7 @@ const autoPlayState = {
   session: null,
   animate: true,
   displayMode: 'animate',
+  searchLimitMs: AUTO_PLAY_SEARCH_MS,
   phase: 'idle',
   searchComputeMs: 0,
   searchStartedAt: null,
@@ -618,14 +680,31 @@ autoPlayBtn?.addEventListener('click', () => {
   }
   if (analysisTransferState.active) return;
   document.querySelector(`input[name="auto-play-display"][value="${autoPlayState.displayMode}"]`).checked = true;
+  document.getElementById('auto-play-timeout').value = autoPlayState.searchLimitMs / 60000;
   document.getElementById('auto-play-options').showModal();
 });
 
+document.querySelectorAll('[data-archive-action]').forEach(button => button.addEventListener('click', () => { void chooseBoardArchive(button.dataset.archiveAction === 'open'); }));
+
 document.getElementById('auto-play-start')?.addEventListener('click', () => {
   if (autoPlayState.active || !isAutoPlayAvailable() || analysisTransferState.active) return;
+  const timeoutInput = document.getElementById('auto-play-timeout');
+  if (!timeoutInput.reportValidity()) return;
+  const searchLimitMs = timeoutInput.valueAsNumber * 60000;
+  if (!Number.isFinite(searchLimitMs) || searchLimitMs <= 0) return;
+  autoPlayState.searchLimitMs = searchLimitMs;
   autoPlayState.displayMode = document.querySelector('input[name="auto-play-display"]:checked').value;
   autoPlayState.animate = autoPlayState.displayMode === 'animate';
+  // Every explicit Start begins with a fresh random deal, independent of the
+  // board selected for manual play in Saved boards.
+  state.tiles = createShuffledBoard();
+  state.initialTiles = [...state.tiles];
+  state.history = [];
+  state.dragState = createEmptyDragState();
+  undoCount = 0;
+  updateNoLegalMovesState();
   document.getElementById('auto-play-options').close();
+  render();
   void runAutoPlay();
 });
 
@@ -1360,18 +1439,24 @@ const AUTO_PLAY_RESULT_MS = 2 * 1000;
 function renderAutoPlaySession() {
   const panel = document.getElementById('auto-play-session');
   const session = autoPlayState.session;
+  const noDisplay = autoPlayState.active && autoPlayState.displayMode === 'none';
+  const layoutChanged = gameScreen.classList.contains('auto-play-no-display') !== noDisplay;
+  gameScreen.classList.toggle('auto-play-no-display', noDisplay);
   if (!panel) return;
   panel.classList.toggle('hidden', !session || !isAutoPlayAvailable() || appState.mode !== 'play' || appState.screen !== 'game');
   if (!session) return;
   const elapsed = (session.endedAt ?? performance.now()) - session.startedAt;
   document.getElementById('auto-play-elapsed').textContent = formatElapsedTimer(elapsed);
   const searchElapsed = autoPlayState.searchComputeMs;
-  document.getElementById('auto-play-search-elapsed').textContent = formatElapsedTimer(searchElapsed);
+  document.getElementById('auto-play-search-elapsed').textContent = `${(searchElapsed / 1000).toFixed(2)} seconds`;
   document.getElementById('auto-play-solved').textContent = String(session.solved);
+  document.getElementById('auto-play-max-solve').textContent = session.maxSolveMs == null ? '—' : formatElapsedTimer(session.maxSolveMs);
   document.getElementById('auto-play-unsolvable').textContent = String(session.unsolvable);
   document.getElementById('auto-play-unknown').textContent = String(session.unknown);
   const status = document.getElementById('auto-play-status');
   if (status.textContent !== autoPlayState.message) status.textContent = autoPlayState.message;
+  status.title = autoPlayState.message;
+  if (layoutChanged) syncGameBoardSize();
 }
 
 function showAutoPlaySearchPosition(event) {
@@ -1387,7 +1472,7 @@ function showAutoPlaySearchPosition(event) {
 }
 
 function autoPlayInterrupted() {
-  return !autoPlayState.active || autoPlayState.stopRequested;
+  return !autoPlayState.active || autoPlayState.stopRequested || (autoPlayState.phase === 'search' && autoPlayState.searchComputeMs >= autoPlayState.searchLimitMs);
 }
 
 async function pauseAutoPlay(ms) {
@@ -1476,13 +1561,15 @@ function createAutoPlayTimedSearch(tiles, adjacency, options) {
   };
 }
 
-// Plan one future batch in a separate thread while the approved batch plays.
+// Plan a complete, verified continuation off the page thread.
 // The worker receives the predicted board/history and never touches live tiles.
+let autoPlayProofSnapshot=null;
 function createAutoPlayPrefetch(tiles, adjacency, history) {
   if (typeof Worker === 'undefined') return null;
   const options = {hybrid: true, batchGroups: 0, history};
   const source = `const SplashSearch = (${createSplashSearch.toString()})();
     onmessage = ({data}) => {
+      SplashSearch.restoreProofCache(data.proofCache);
       const search = SplashSearch.solve(data.tiles, data.adjacency, data.options);
       let lastProgress = 0, computeMs = 0;
       const advance = () => {
@@ -1490,7 +1577,13 @@ function createAutoPlayPrefetch(tiles, adjacency, history) {
         try { return search.next(); }
         finally { computeMs += Math.max(0, performance.now()-started); }
       };
-      const report = payload => postMessage({...payload, computeMs});
+      let lastProofSnapshot=Date.now();
+      const report = payload => {
+        const save=payload.kind==='done'||Date.now()-lastProofSnapshot>=30000;
+        const proof=save?{proofCache:SplashSearch.exportProofCache()}:{};
+        if(save)lastProofSnapshot=Date.now();
+        postMessage({...payload,...proof,computeMs});
+      };
       try {
         for (;;) {
           const step = advance();
@@ -1526,11 +1619,13 @@ function createAutoPlayPrefetch(tiles, adjacency, history) {
     finishWorker();
     // If workers are unavailable in this browser, resume the same strategic
     // search cooperatively when its batch is requested.
+    SplashSearch.restoreProofCache(autoPlayProofSnapshot);
     fallback = createAutoPlayTimedSearch(tiles, adjacency, options);
     if (pending) { const resolve=pending; pending=null; resolve(fallback.next()); }
   }
   worker.onmessage = ({data}) => {
     if (closed) return;
+    if (Object.hasOwn(data,'proofCache'))autoPlayProofSnapshot=data.proofCache;
     if (Number.isFinite(data.computeMs) && data.computeMs > workerComputeMs) {
       autoPlayState.searchComputeMs += data.computeMs-workerComputeMs;
       workerComputeMs = data.computeMs;
@@ -1574,7 +1669,8 @@ function createAutoPlayPrefetch(tiles, adjacency, history) {
       if (pending) { const resolve=pending;pending=null;resolve({done:true,value:'unknown'}); }
     }
   };
-  worker.postMessage({tiles,adjacency,options});
+  const proofCache=SplashSearch.exportProofCache()||autoPlayProofSnapshot;
+  worker.postMessage({tiles,adjacency,options,proofCache});
   return controller;
 }
 
@@ -1583,7 +1679,7 @@ async function runAutoPlay() {
   autoPlayState.stopRequested = false;
   const now = performance.now();
   if (!autoPlayState.session) {
-    autoPlayState.session = {startedAt: now, endedAt: null, solved: 0, unsolvable: 0, unknown: 0};
+    autoPlayState.session = {startedAt: now, endedAt: null, solved: 0, unsolvable: 0, unknown: 0, maxSolveMs: null};
   } else if (autoPlayState.session.endedAt !== null) {
     // Resume the same session without counting time spent stopped.
     autoPlayState.session.startedAt += now - autoPlayState.session.endedAt;
@@ -1631,7 +1727,7 @@ async function runAutoPlay() {
         const step = await search.next();
         if (autoPlayInterrupted()) break;
         if (step.done) {
-          if (!['solved','unsolvable'].includes(step.value)) throw new Error('Hybrid search ended without a conclusion');
+          if (!['solved','unsolvable','unknown'].includes(step.value)) throw new Error('Auto Play planner ended without a conclusion');
           result = step.value; break;
         }
         if (step.value.type === 'batch-ready') {
@@ -1657,23 +1753,32 @@ async function runAutoPlay() {
           // can take a long time, so replace its stale Backtracking label
           // and expose real progress rather than leaving a frozen display.
           const objective = step.value.objective;
-          const label = step.value.phase === 'funding'
+          const label = step.value.phase === 'beam-planning'
+            ? 'Exploring alternative full-board continuations'
+            : step.value.phase === 'bridge-planning'
+            ? 'Planning interacting color bridges'
+            : step.value.phase === 'funding'
             ? `Checking ${objective?.color || 'bridge'} supplies`
-            : step.value.phase === 'complete-search' || step.value.phase === 'verification' ? 'Complete search — no time limit'
+            : step.value.phase === 'complete-search' || step.value.phase === 'verification' ? `Complete search — ${autoPlayState.searchLimitMs / 60000}-minute limit`
             : step.value.phase === 'planning'
             ? objective ? `Planning clearance of ${objective.color} group` : 'Planning clearances'
             : step.value.phase === 'endgame-check' ? 'Checking the small remaining board'
             : step.value.phase === 'batch-check' ? 'Checking the board after planned clearances'
             : step.value.phase === 'exploration' ? 'Checking promising moves' : 'Checking a complete continuation';
+          const proof = step.value.proofProgress;
+          const proofDetail = proof && proof.total
+            ? ` Completed ${proof.completed.toLocaleString()} of ${proof.total.toLocaleString()} initial ${proof.kind === 'components' ? 'components' : 'move branches'}; current depth ${proof.depth}. Branch sizes vary; time remaining is unknown.` : '';
           const progress = Number.isSafeInteger(step.value.positions)
             ? ` ${step.value.positions.toLocaleString()} search checks (including repeats).` +
-              (step.value.proofStats ? ` ${step.value.proofStats.cacheHits.toLocaleString()} cached proofs reused; ${step.value.proofStats.commuted.toLocaleString()} equivalent move orders skipped.` : '') : '';
+              (step.value.proofStats ? ` ${step.value.proofStats.cacheHits.toLocaleString()} cached proofs reused; ${step.value.proofStats.commuted.toLocaleString()} equivalent move orders skipped.` +
+                (step.value.proofStats.retainedFailures ? ` ${step.value.proofStats.retainedFailures.toLocaleString()} cached failures retained from earlier searches.` : '') +
+                (step.value.proofStats.failedEvictions ? ` ${step.value.proofStats.failedEvictions.toLocaleString()} old cached failures evicted.` : '') : '') + proofDetail : '';
           const searchGoal = JSON.stringify([step.value.phase, step.value.restart, objective?.color,
             objective?.cells?.slice().sort((a,b)=>a-b)]);
           const goalChanged = searchGoal !== lastSearchGoal;
           if (step.value.phase === 'complete-search' || step.value.restart || performance.now() >= nextPlanningStatus ||
               (autoPlayState.displayMode === 'process' && goalChanged)) {
-            autoPlayState.message = step.value.message ? `${step.value.message}${progress}` : `${label}…${progress}`;
+            autoPlayState.message = step.value.message ? `${step.value.message.replace(/no time limit/g, `${autoPlayState.searchLimitMs / 60000}-minute limit`)}${progress}` : `${label}…${progress}`;
             nextPlanningStatus = performance.now() + 1500;
             showAutoPlaySearchPosition(step.value);
             renderAutoPlaySession();
@@ -1711,6 +1816,7 @@ async function runAutoPlay() {
           await waitForAutoPlayMs(0);
         }
       }
+      if (!result && !autoPlayState.stopRequested && autoPlayState.searchComputeMs >= autoPlayState.searchLimitMs) result = 'unknown';
       search.return();
       prefetch?.return();
       if (autoPlayState.stopRequested) break;
@@ -1733,8 +1839,11 @@ async function runAutoPlay() {
       autoPlayState.searchEndedAt = performance.now();
       autoPlayState.phase = 'result';
       autoPlayState.session[result] += 1;
-      if (result === 'unsolvable') saveTimedOutBoard('unsolvable');
-      autoPlayState.message = result === 'solved' ? 'Solution found!' : 'Board is unsolvable!';
+      if (result === 'solved') {
+        autoPlayState.session.maxSolveMs = Math.max(autoPlayState.session.maxSolveMs ?? 0, autoPlayState.searchComputeMs);
+      }
+      if (result === 'unsolvable' || result === 'unknown') await saveTimedOutBoard(result === 'unknown' ? 'timed-out' : 'unsolvable');
+      autoPlayState.message = result === 'solved' ? 'Solution found!' : result === 'unknown' ? `${autoPlayState.searchLimitMs / 60000}-minute limit reached; board saved to archive.` : 'Board is unsolvable!';
       if (result !== 'solved') {
         // Restore the original deal, undoing even manual moves made before
         // Auto Play, before halting on a proof or advancing after a timeout.
@@ -1767,13 +1876,13 @@ async function runAutoPlay() {
     }
   } catch (error) {
     console.error('Auto Play search failed', error);
-    autoPlayState.message = 'Auto Play stopped because of an error.';
+    autoPlayState.message = savedTimeoutStorageWarning || 'Auto Play stopped because of an error.';
   } finally {
     cancelSearch?.();
     window.clearInterval(tick);
     autoPlayState.searchEndedAt ??= performance.now();
     autoPlayState.session.endedAt = performance.now();
-    if (autoPlayState.stopRequested) autoPlayState.message = 'Auto Play stopped.';
+    if (autoPlayState.stopRequested) autoPlayState.message = savedTimeoutStorageWarning || 'Auto Play stopped.';
     autoPlayState.searchView = null;
     autoPlayState.searchGroup = [];
     autoPlayState.active = false;
@@ -3333,14 +3442,15 @@ function renderLandingBoard() {
 function render() {
   renderAutoPlaySession();
   renderAnalysisStatus();
-  syncGameBoardSize();
+  // No display keeps the board fixed; resize events still fit it to the window.
+  if (!(autoPlayState.active && autoPlayState.displayMode === 'none')) syncGameBoardSize();
   renderAnalysisGraph();
   maybeCaptureAnalysisMaxState();
   renderInnerTiles();
   renderPreview();
   renderDragLayer();
   renderDemoLayer();
-  updateScore();
+  if (!(autoPlayState.active && autoPlayState.displayMode === 'none')) updateScore();
   updateUndoCount();
   updateBoardTimer();
   renderNoMovesNotice();

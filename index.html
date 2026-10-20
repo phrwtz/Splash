@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Splash</title>
-    <link rel="stylesheet" href="styles.css?v=e26d40844852" />
+    <link rel="stylesheet" href="styles.css?v=20261020-beam-v1" />
   </head>
   <body>
     <main class="app">
@@ -96,10 +96,11 @@
             <p id="auto-play-status" role="status" aria-live="polite"></p>
             <div class="auto-play-stats">
               <span>Session: <span id="auto-play-elapsed">0 minutes, 0 seconds</span></span>
-              <span>Current search: <span id="auto-play-search-elapsed">0 minutes, 0 seconds</span></span>
+              <span>Current search: <span id="auto-play-search-elapsed">0.00 seconds</span></span>
               <span>Solved: <span id="auto-play-solved">0</span></span>
+              <span title="Longest search computation time for a solved board in this Auto Play session; excludes animation and pauses.">Maximum solve time: <span id="auto-play-max-solve">—</span></span>
               <span>Proved unsolvable: <span id="auto-play-unsolvable">0</span></span>
-              <span hidden>Timed out: <span id="auto-play-unknown">0</span></span>
+              <span>Timed out: <span id="auto-play-unknown">0</span></span>
             </div>
           </section>
           <p id="no-moves-notice" class="no-moves-notice hidden" role="status" aria-live="polite">
@@ -141,6 +142,9 @@
 
     <dialog id="auto-play-options" aria-labelledby="auto-play-options-title">
       <h2 id="auto-play-options-title">Auto Play</h2>
+      <p>Each board gets the selected limit of search computation (animation pauses excluded). Timed-out boards are counted, saved, and skipped; a timeout does not prove a board unsolvable.</p>
+      <p><label for="auto-play-timeout">Timeout per board (minutes)</label> <input id="auto-play-timeout" type="number" min="0.01" step="any" value="5" required aria-describedby="auto-play-timeout-help"></p>
+      <p id="auto-play-timeout-help">Default: 5 minutes. Enter a positive number; fractional minutes are allowed.</p>
       <fieldset>
         <legend>Display mode</legend>
         <p><label><input id="auto-play-animation" type="radio" name="auto-play-display" value="animate" checked> Animate moves</label></p>
@@ -155,6 +159,7 @@
       <h2 id="saved-timeouts-title">Saved boards</h2>
       <p>Proven-unsolvable boards and previously timed-out boards are saved here. Select a board, then choose Play this board to try solving it yourself. Playing one stops Auto Play. Clear this board removes it from this list.</p>
       <p id="saved-timeouts-storage" role="status"></p>
+      <p><button type="button" data-archive-action="open">Open board archive</button> <button type="button" data-archive-action="create">Save boards to new archive</button></p>
       <div id="saved-timeouts-list"></div>
       <div class="saved-timeout-actions">
         <button id="saved-timeout-play" type="button" disabled>Play this board</button>
@@ -162,7 +167,7 @@
       </div>
       <form method="dialog"><button type="submit">Close</button></form>
     </dialog>
-    <script src="search.js?v=20261013-proof-v2"></script>
-    <script src="app.js?v=20261013-proof-v2"></script>
+    <script src="search.js?v=20261020-beam-v1"></script>
+    <script src="app.js?v=20261020-beam-v1"></script>
   </body>
 </html>
