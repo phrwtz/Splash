@@ -703,6 +703,22 @@ function createSplashSearch() {
   }
   function moves(board, adjacency, allBlobs) {
     const owner=new Map(allBlobs.flatMap((g,k)=>g.map(i=>[i,k]))), links=new Set(), result=[];
+    // Occupancy changes only at removed cells. Reuse the base degree score
+    // and update those cells and their neighbors instead of rescanning the board.
+    const degree=board.map((c,i)=>c?adjacency[i].reduce((n,j)=>n+(board[j]?1:0),0):0);
+    const contribution=d=>d*d-(d===1?15:d===0?100:0);
+    const base=board.reduce((n,c,i)=>n+(c?contribution(degree[i]):0),0),scores=new Map();
+    function remainderScore(source,target,clear){
+      const key=clear?board.length+Math.min(source,target)*board.length+Math.max(source,target):source;
+      if(scores.has(key))return scores.get(key);
+      const removed=clear?[source,target]:[source],affected=new Set(removed.flatMap(i=>[i,...adjacency[i]]));
+      let score=base;
+      for(const i of affected)if(board[i]){
+        score-=contribution(degree[i]);
+        if(!removed.includes(i))score+=contribution(degree[i]-removed.reduce((n,j)=>n+(adjacency[i].includes(j)?1:0),0));
+      }
+      scores.set(key,score);return score;
+    }
     board.forEach((c,i)=>{if(c)for(const j of adjacency[i])if(board[j] && !(c&board[j])){
       const a=owner.get(i),b=owner.get(j);links.add(a<b?`${a},${b}`:`${b},${a}`);
     }});
@@ -716,7 +732,7 @@ function createSplashSearch() {
           let score=combined===7?100000:0;
           if(combined!==7 && adjacency[target].some(k=>board[k]===(7^combined)))score+=10000;
           // Prefer a compact remainder, but keep every legal alternative.
-          next.forEach((c,k)=>{if(c){const degree=adjacency[k].filter(v=>next[v]).length;score+=degree*degree-(degree===1?15:degree===0?100:0);}});
+          score+=remainderScore(source,target,combined===7);
           result.push({source,target,next,score});
         };
         add(i,j);if(combined!==7)add(j,i);
@@ -1063,6 +1079,11 @@ function createSplashSearch() {
           for(const group of currentBlobs)if(current[group[0]]===goal.color&&group.some(i=>members.has(i)))
             for(const i of group)for(const j of adjacency[i])if(current[j]===(7^goal.color))for(const k of currentOwner.get(j))helperSuppliers.add(k);
           for(const move of legal(current)){
+            // Rejected helper combinations also cost work. Yield before the
+            // expensive second-move generation so other lanes and the caller's
+            // deadline can run even when no helper reaches visit().
+            if(left<=0||budget.left<=0)return;
+            positions++;if((positions&15)===1)yield checkpoint('planning',goal,snapshot(current));
             if(!helperSuppliers.has(move.source)&&!helperSuppliers.has(move.target))continue;
             if(members.has(move.source)||members.has(move.target))continue;
             const mixed=current[move.source]|current[move.target];
@@ -1071,6 +1092,8 @@ function createSplashSearch() {
               (m.source===move.target||m.target===move.target)&&
               (move.next[m.source]|move.next[m.target])===7).map(m=>[move,m]);
             for(const helper of helpers){
+              if(left<=0||budget.left<=0)return;
+              positions++;if((positions&15)===1)yield checkpoint('planning',goal,snapshot(current));
               if(helper.some(m=>assessment(m.next).reason))continue;
               const moves=helper.map(m=>({source:m.source,target:m.target}));
               const helperResources=helper.map((m,k)=>({tile:m.source,receiver:m.target,role:'helper',step:path.length+k+1}));
@@ -1603,24 +1626,56 @@ function createSplashSearch() {
     return remainder/1000000-.5;
   }
 
+  function beamColorWeights(seed,equal){return Array.from({length:7},(_,c)=>{
+      if(equal)return 1;
+      const a=beamMultiply(seed,0,0x7f4a7c15,0x9e3779b9),b=beamMultiply(c,0,0x1ce4e5b9,0xbf58476d);
+      let lo=(a[0]^b[0])>>>0,hi=(a[1]^b[1])>>>0;
+      lo=(lo^(lo>>>31)^(hi<<1))>>>0;hi=(hi^(hi>>>31))>>>0;
+      return .25+((hi%10000)*7296+lo)%10000/4000;
+    });}
+
   // Bounded beam portfolio used by the offline timeout-board solver. Two
   // 30-bit words represent each color, avoiding BigInt costs in the browser.
   // This is a solution finder only: pruning/exhaustion never proves failure.
-  function* beamSolve(tiles, adjacency, configuration=null) {
+  function* beamSolve(tiles, adjacency, configuration=null, enhanced=true) {
     const n=tiles.length;
     if(n>60)return 'unknown';
+    if(configuration?.adaptive){
+      // Each ranking retains its own frontier. A wide search cannot keep the
+      // other color priorities waiting for its entire first pass to finish.
+      const policies=[
+        {width:128,seed:500,clear:30,group:2,noise:150,slice:10},
+        {width:128,seed:501,clear:45,group:.5,noise:40,slice:10},
+        {width:256,seed:512,clear:30,group:2,noise:150,slice:10},
+        {width:1024,seed:548,clear:30,group:2,noise:150,slice:30},
+        {width:1024,seed:114,clear:30,group:2,noise:150,equal:true,slice:30},
+        {width:512,seed:539,clear:15,group:1,noise:100,slice:80},
+        {width:64,seed:535,clear:45,group:.5,noise:800,slice:10}
+      ];
+      const lanes=policies.map(p=>beamSolve(tiles,adjacency,{...p,adaptiveTail:true}));
+      try{for(;;)for(let i=0;i<lanes.length;i++){
+        let work=0;
+        for(let count=0;count<512;count++){
+          const started=Date.now(),step=lanes[i].next();work+=Math.max(0,Date.now()-started);
+          if(step.done)return step.value;
+          if(step.value.type!=='search'){for(const lane of lanes)if(lane!==lanes[i])lane.return();yield step.value;return yield* lanes[i];}
+          yield step.value;if(work>=policies[i].slice)break;
+        }
+      }}finally{for(const lane of lanes)lane.return();}
+    }
     if(!configuration){
       const standard=beamSolve(tiles,adjacency,{width:256,diverse:false,seed:1,initialNoise:0,retryNoise:120});
       const wide=beamSolve(tiles,adjacency,{width:512,diverse:false,seed:2,initialNoise:60,retryNoise:120});
       const varied=beamSolve(tiles,adjacency,{width:64,diverse:true,seed:3,initialNoise:200,retryNoise:300});
-      const lanes=[standard,wide,varied];
+      const adaptive=enhanced?beamSolve(tiles,adjacency,{adaptive:true}):null;
+      const lanes=[standard,wide,varied,adaptive].filter(Boolean);
       function* finish(winner,event){for(const lane of lanes)if(lane!==winner)lane.return();yield event;return yield* winner;}
       try{
-        // Preserve the cheap deterministic first pass. After that, wide and
-        // varied retries retain independent progress instead of queuing behind
-        // one another; neither can monopolize the caller's timeout.
-        for(;;){const step=standard.next();if(step.done)return step.value;if(step.value.type!=='search')return yield* finish(standard,step.value);yield step.value;if(step.value.restart>1)break;}
-        for(;;)for(const [lane,slice] of [[wide,25],[varied,20],[standard,5]]){
+        // Give the deterministic search ten seconds, retaining its frontier.
+        // All rankings then share computation so a difficult first pass cannot
+        // keep the adaptive searches waiting until the caller times out.
+        let headStart=0;for(;;){const started=Date.now(),step=standard.next();headStart+=Math.max(0,Date.now()-started);if(step.done)return step.value;if(step.value.type!=='search')return yield* finish(standard,step.value);yield step.value;if(step.value.restart>1||enhanced&&headStart>=10000)break;}
+        for(;;)for(const [lane,slice] of (enhanced?[[adaptive,60],[wide,15],[varied,10],[standard,5]]:[[wide,25],[varied,20],[standard,5]])){
           let work=0;
           for(let count=0;count<512;count++){
             const started=Date.now(),step=lane.next();work+=Math.max(0,Date.now()-started);
@@ -1637,7 +1692,19 @@ function createSplashSearch() {
     const edges=adjacency.map(a=>{const m=[0,0];for(const i of a)m[halves[i]]|=bits[i];return m;});
     function neighbors(lo,hi){let a=0,b=0;while(lo){const bit=lo&-lo,i=31-Math.clz32(bit);lo^=bit;a|=edges[i][0];b|=edges[i][1];}while(hi){const bit=hi&-hi,i=61-Math.clz32(bit);hi^=bit;a|=edges[i][0];b|=edges[i][1];}return [a,b];}
     function flood(lo,hi,allowedLo,allowedHi){for(;;){const [a,b]=neighbors(lo,hi),x=lo|(a&allowedLo),y=hi|(b&allowedHi);if(x===lo&&y===hi)return [lo,hi];lo=x;hi=y;}}
-    function colorGroups(board){const result=[];for(let c=1;c<7;c++){let lo=board[c*2],hi=board[c*2+1];while(lo||hi){const [a,b]=flood(lo?lo&-lo:0,lo?0:hi&-hi,lo,hi);lo^=a;hi^=b;const [edgeLo,edgeHi]=neighbors(a,b);result.push({lo:a,hi:b,edgeLo,edgeHi,color:c,size:pop(a)+pop(b)});}}return result;}
+    const colorGroupCaches=configuration.adaptiveTail?Array.from({length:7},()=>boundedMap(1024)):null;
+    function colorGroups(board){
+      if(!colorGroupCaches){const result=[];for(let c=1;c<7;c++){let lo=board[c*2],hi=board[c*2+1];while(lo||hi){const [a,b]=flood(lo?lo&-lo:0,lo?0:hi&-hi,lo,hi);lo^=a;hi^=b;const [edgeLo,edgeHi]=neighbors(a,b);result.push({lo:a,hi:b,edgeLo,edgeHi,color:c,size:pop(a)+pop(b)});}}return result;}
+      const result=[];
+      for(let c=1;c<7;c++){
+        let lo=board[c*2],hi=board[c*2+1];const cache=colorGroupCaches?.[c],key=lo+','+hi,cached=cache?.get(key);
+        if(cached){result.push(...cached);continue;}
+        const groups=[];
+        while(lo||hi){const [a,b]=flood(lo?lo&-lo:0,lo?0:hi&-hi,lo,hi);lo^=a;hi^=b;const [edgeLo,edgeHi]=neighbors(a,b);groups.push({lo:a,hi:b,edgeLo,edgeHi,color:c,size:pop(a)+pop(b)});}
+        if(cache)cache.set(key,groups);result.push(...groups);
+      }
+      return result;
+    }
     function cells(lo,hi){const out=[];while(lo){const bit=lo&-lo;out.push(31-Math.clz32(bit));lo^=bit;}while(hi){const bit=hi&-hi;out.push(61-Math.clz32(bit));hi^=bit;}return out;}
     function occupancy(b){let lo=0,hi=0;for(let c=1;c<7;c++){lo|=b[c*2];hi|=b[c*2+1];}return [lo,hi];}
     function viable(b,lo,hi){
@@ -1647,23 +1714,74 @@ function createSplashSearch() {
       while(leftLo||leftHi){const [a,d]=flood(leftLo?leftLo&-leftLo:0,leftLo?0:leftHi&-leftHi,leftLo,leftHi);leftLo^=a;leftHi^=d;const totals=ingredient.map(m=>pop(a&m[0])+pop(d&m[1]));if(totals[0]!==totals[1]||totals[0]!==totals[2])return false;}
       for(const s of [3,5,6]){
         let remainLo=b[s*2],remainHi=b[s*2+1];if(!remainLo&&!remainHi)continue;
-        let allowedLo=0,allowedHi=0;for(let c=1;c<7;c++)if(!(c&~s)){allowedLo|=b[c*2];allowedHi|=b[c*2+1];}
+        const demands=[];let allowedLo=0,allowedHi=0;for(let c=1;c<7;c++)if(!(c&~s)){allowedLo|=b[c*2];allowedHi|=b[c*2+1];}
         while(remainLo||remainHi){const [a,d]=flood(remainLo?remainLo&-remainLo:0,remainLo?0:remainHi&-remainHi,allowedLo,allowedHi);remainLo&=~a;remainHi&=~d;const [e,f]=neighbors(a,d),complement=7^s;let supplyLo=e&b[complement*2],supplyHi=f&b[complement*2+1],donorLo=0,donorHi=0;
           while(supplyLo||supplyHi){const [x,y]=flood(supplyLo?supplyLo&-supplyLo:0,supplyLo?0:supplyHi&-supplyHi,b[complement*2],b[complement*2+1]);donorLo|=x;donorHi|=y;supplyLo&=~x;supplyHi&=~y;}
-          if(pop(a&b[s*2])+pop(d&b[s*2+1])>pop(donorLo)+pop(donorHi))return false;
+          const need=pop(a&b[s*2])+pop(d&b[s*2+1]);
+          if(need>pop(donorLo)+pop(donorHi))return false;
+          demands.push({need,lo:donorLo,hi:donorHi});
+        }
+        let need=0,donorLo=0,donorHi=0;
+        for(const d of demands){need+=d.need;donorLo|=d.lo;donorHi|=d.hi;}
+        if(need>pop(donorLo)+pop(donorHi))return false;
+        for(let a=0;a<demands.length;a++)for(let d=a+1;d<demands.length;d++){
+          const x=demands[a],y=demands[d],lo=x.lo|y.lo,hi=x.hi|y.hi;
+          if(x.need+y.need>pop(lo)+pop(hi))return false;
+          for(let c=d+1;c<demands.length;c++){const z=demands[c];if(x.need+y.need+z.need>pop(lo|z.lo)+pop(hi|z.hi))return false;}
         }
       }
       return true;
     }
     const key=b=>String.fromCharCode(b[2]&65535,b[2]>>>16,b[3]&65535,b[3]>>>16,b[4]&65535,b[4]>>>16,b[5]&65535,b[5]>>>16,b[6]&65535,b[6]>>>16,b[7]&65535,b[7]>>>16,b[8]&65535,b[8]>>>16,b[9]&65535,b[9]>>>16,b[10]&65535,b[10]>>>16,b[11]&65535,b[11]>>>16,b[12]&65535,b[12]>>>16,b[13]&65535,b[13]>>>16);
-    function rank(b,lo,hi,gs,diverse){let score=-45*(pop(lo)+pop(hi));for(const g of gs){score+=(diverse ? 0.5 : 2)*g.size*g.size;if(g.color===1||g.color===2||g.color===4){let a=0,d=0;for(let c=1;c<7;c++)if(!(c&g.color)){a|=b[c*2];d|=b[c*2+1];}if(!((g.edgeLo&a)||(g.edgeHi&d)))return -Infinity;}}for(const i of cells(lo,hi)){const degree=pop(edges[i][0]&lo)+pop(edges[i][1]&hi);score+=degree*2-(degree<=1?15:0);}return score;}
+    const occupancyScores=boundedMap(8192);
+    function occupancyScore(lo,hi){
+      const k=lo+','+hi,cached=occupancyScores.get(k);if(cached!==undefined)return cached;
+      const terms=[];for(const i of cells(lo,hi)){const degree=pop(edges[i][0]&lo)+pop(edges[i][1]&hi);terms.push(degree*2-(degree<=1?15:0));}
+      occupancyScores.set(k,terms);return terms;
+    }
+    function rank(b,lo,hi,gs,diverse,weights=null){let score=-(weights?.clear??45)*(pop(lo)+pop(hi));for(const g of gs){score+=(weights?.group??(diverse ? 0.5 : 2))*(weights?.colors[g.color]??1)*g.size*g.size;if(g.color===1||g.color===2||g.color===4){let a=0,d=0;for(let c=1;c<7;c++)if(!(c&g.color)){a|=b[c*2];d|=b[c*2+1];}if(!((g.edgeLo&a)||(g.edgeHi&d)))return -Infinity;}}if(configuration.adaptiveTail)for(const term of occupancyScore(lo,hi))score+=term;else for(const i of cells(lo,hi)){const degree=pop(edges[i][0]&lo)+pop(edges[i][1]&hi);score+=degree*2-(degree<=1?15:0);}return score;}
+    function* exactTail(b,budget,weights){
+      if(budget.left--<=0)return undefined;
+      if((++checked&127)===0)yield {type:'search',phase:'beam-planning',positions:checked,tiles:tiles.slice(),message:'Checking a bounded endgame continuation.'};
+      const [lo,hi]=occupancy(b);if(!lo&&!hi)return [];
+      const k=key(b);if(tailDead.has(k))return null;
+      const remember=()=>{if(tailDead.size>=20000)tailDead.delete(tailDead.values().next().value);tailDead.add(k);};
+      if(!viable(b,lo,hi)){remember();return null;}
+      // Independent occupied components cannot exchange any ingredients.
+      const [cl,ch]=flood(lo?lo&-lo:0,lo?0:hi&-hi,lo,hi);
+      if(cl!==lo||ch!==hi){
+        let leftLo=lo,leftHi=hi;const result=[],components=[];
+        while(leftLo||leftHi){const [a,d]=flood(leftLo?leftLo&-leftLo:0,leftLo?0:leftHi&-leftHi,leftLo,leftHi);leftLo&=~a;leftHi&=~d;components.push({lo:a,hi:d,size:pop(a)+pop(d)});}
+        components.sort((a,b)=>a.size-b.size);
+        for(const {lo:a,hi:d} of components){const sub=b.map((v,i)=>v&(i%2?d:a));const path=yield* exactTail(sub,budget,weights);if(path===undefined)return undefined;if(path===null){remember();return null;}result.push(...path);}
+        return result;
+      }
+      const gs=colorGroups(b),moves=[],seen=new Set();
+      for(let a=0;a<gs.length;a++)for(let d=a+1;d<gs.length;d++){
+        const g=gs[a],h=gs[d];if((g.color&h.color)||!((g.edgeLo&h.lo)||(g.edgeHi&h.hi)))continue;
+        for(const x of cells(g.lo,g.hi))for(const y of cells(h.lo,h.hi))for(let dir=0;dir<((g.color|h.color)===7?1:2);dir++){
+          const source=dir?y:x,target=dir?x:y,sc=dir?h.color:g.color,tc=dir?g.color:h.color,mix=sc|tc,next=b.slice();
+          next[sc*2+halves[source]]&=~bits[source];next[tc*2+halves[target]]&=~bits[target];if(mix!==7)next[mix*2+halves[target]]|=bits[target];
+          const nk=key(next);if(seen.has(nk))continue;seen.add(nk);
+          const [a,d]=occupancy(next),score=rank(next,a,d,colorGroups(next),true,weights);
+          if(score!==-Infinity)moves.push({source,target,board:next,score});
+        }
+      }
+      moves.sort((a,b)=>b.score-a.score);
+      for(const move of moves){const path=yield* exactTail(move.board,budget,weights);if(path===undefined)return undefined;if(path!==null)return [{source:move.source,target:move.target},...path];}
+      remember();return null;
+    }
     const root=Array(14).fill(0);for(let i=0;i<n;i++)root[masks[tiles[i]]*2+halves[i]]|=bits[i];root[0]=root[1]=0;
     if(tiles.every(c=>c==='white'))return 'solved';
     let checked=0;
+    const tailDead=new Set();
     for(let attempt=0;;attempt++){
-      const {diverse,width}=configuration,seed=configuration.seed+attempt;
-      const noise=attempt?configuration.retryNoise:configuration.initialNoise;
-      let frontier=[{board:root,parent:null}],winner=null;
+      const setting=configuration.adaptiveTail?configuration:null;
+      const width=setting?.width??configuration.width,diverse=configuration.diverse??true;
+      const seed=setting?setting.seed+attempt:configuration.seed+attempt;
+      const noise=setting?.noise??(attempt?configuration.retryNoise:configuration.initialNoise);
+      const weights=setting?{...setting,colors:beamColorWeights(setting.seed,setting.equal)}:null;
+      let frontier=[{board:root,parent:null}],winner=null,tailPath=[];
       yield {type:'search',phase:'beam-planning',tiles:tiles.slice(),positions:checked,restart:attempt+1,message:`Exploring alternative full-board continuations (beam ${width}, attempt ${attempt+1}).`};
       // A primary mix removes one cell; a three-ingredient clearance removes
       // two. Ingredient totals determine the required number of clearances.
@@ -1681,21 +1799,34 @@ function createSplashSearch() {
             const k=key(b);if(seen.has(k))continue;
             // Forgetting dedup keys affects speed only, and bounds memory even
             // on large groups with many possible source/target pairs.
-            if(seen.size<250000)seen.add(k);
+            if(seen.size<(configuration.adaptiveTail?50000:250000))seen.add(k);
             const [lo,hi]=occupancy(b),node={board:b,parent,source,target,key:k,score:0};
             if(!lo&&!hi){winner=node;break expansion;}
-            if(!viable(b,lo,hi))continue;
-            let score=rank(b,lo,hi,colorGroups(b),diverse);if(score===-Infinity)continue;
+            if(!configuration.adaptiveTail&&!viable(b,lo,hi))continue;
+            let score=rank(b,lo,hi,colorGroups(b),diverse,weights);if(score===-Infinity)continue;
             if(noise)score+=beamNoise(b,seed)*noise;
+            // A candidate below a full beam's cutoff cannot be retained even
+            // if viable. Defer expensive ingredient/donor checks until needed.
+            if(configuration.adaptiveTail){
+              if(heap.length>=width&&score<=heap[0].score)continue;
+              if(!viable(b,lo,hi))continue;
+            }
             node.score=score;keep(node);
           }
           if(winner)break;
         }if(winner)break;}
         if(!heap.length)break;
         frontier=heap.sort((a,b)=>b.score-a.score);
+        if(configuration.adaptiveTail){
+          for(const node of frontier.slice(0,16)){
+            const [lo,hi]=occupancy(node.board);if(pop(lo)+pop(hi)>24)continue;
+            const path=yield* exactTail(node.board,{left:50000},weights);
+            if(path!==null&&path!==undefined){winner=node;tailPath=path;break;}
+          }
+        }
       }
       if(!winner)continue;
-      const path=[];for(let node=winner;node.parent;node=node.parent)path.push({source:node.source,target:node.target});path.reverse();
+      const path=[];for(let node=winner;node.parent;node=node.parent)path.push({source:node.source,target:node.target});path.reverse();path.push(...tailPath);
       // Validate the complete plan before handing any move to the player.
       let current=tiles.map(c=>masks[c]);const playback=[];
       for(const [i,move] of path.entries()){
@@ -1718,18 +1849,18 @@ function createSplashSearch() {
     const legacyAttempt=variant=>solveAttempt(tiles,adjacency,{...options,
       moveTreeSearch:false,strategyOnly:true,bridgePlanning:false,batchGroups:0,
       planningVariant:variant,sectionRestarts:options.sectionRestarts??4});
-    function* bridgePortfolio(){
+    function* bridgePortfolio(expanded=false){
       for(let attempt=0;;attempt++){
         const scale=2**Math.min(3,Math.floor(attempt/3));
         yield {type:'search',phase:'bridge-planning',restart:attempt+1,tiles:tiles.slice(),
           message:`Planning interacting color bridges (attempt ${attempt+1}).`};
         const search=solveAttempt(tiles,adjacency,{...options,moveTreeSearch:false,
           strategyOnly:true,bridgePlanning:true,batchGroups:0,planningVariant:attempt,
-          bridgeWidth:options.bridgeWidth??8*scale,
-          bridgeGoalBudget:options.bridgeGoalBudget??18*scale,
-          bridgeJobStates:options.bridgeJobStates??96*scale,
-          bridgeVariants:options.bridgeVariants??4*scale,
-          bridgePathStates:options.bridgePathStates??256*scale});
+          bridgeWidth:options.bridgeWidth??(expanded?64:8*scale),
+          bridgeGoalBudget:options.bridgeGoalBudget??(expanded?144:18*scale),
+          bridgeJobStates:options.bridgeJobStates??(expanded?768:96*scale),
+          bridgeVariants:options.bridgeVariants??(expanded?32:4*scale),
+          bridgePathStates:options.bridgePathStates??(expanded?2048:256*scale)});
         try{
           let step;
           while(!(step=search.next()).done)yield step.value;
@@ -1747,11 +1878,14 @@ function createSplashSearch() {
       strategyStates:options.strategyStates??12000,
       sectionStates:options.sectionStates??120000,
       frontierStates:options.frontierStates??4096});
-    let beam=options.beamSearch===false?null:beamSolve(tiles,adjacency);
+    let beam=options.beamSearch===false?null:beamSolve(tiles,adjacency,null,false);
+    let enhanced=false,portfolioWork=0;
+    const adaptiveAfterMs=options.adaptiveAfterMs??210000;
+    if(!Number.isFinite(adaptiveAfterMs)||adaptiveAfterMs<0)throw new RangeError('adaptiveAfterMs must be nonnegative and finite');
     const closeOthers=winner=>{for(const search of [legacy,bridges,diagnostic,beam])if(search&&search!==winner)search.return();};
     const advance=search=>{
-      const started=Date.now(),step=search.next();
-      return {step,work:Math.max(0,Date.now()-started)};
+      const started=Date.now(),step=search.next(),work=Math.max(0,Date.now()-started);portfolioWork+=work;
+      return {step,work};
     };
     try{
       let quickWork=0;
@@ -1769,10 +1903,21 @@ function createSplashSearch() {
       for(;;){
         // Bounded execution slices retain every lane's frontier across turns. Browser
         // scheduling and animation pauses are excluded from computation totals.
-        for(const [search,slice] of [[beam,300],[diagnostic,15],[bridges,10],[legacy,5]]){
+        // Preserve the established five-minute regressions: most finish in
+        // this initial portfolio. Harder deals then get the learned rankings
+        // and larger bridge frontier without retaining duplicate beam caches.
+        if(!enhanced&&beam&&portfolioWork>=adaptiveAfterMs){
+          closeOthers(null);legacyVariant=0;legacy=legacyAttempt(0);legacyWork=0;diagnostic=null;
+          beam=beamSolve(tiles,adjacency,{adaptive:true});
+          bridges=options.expandedBridgeSearch===false?null:bridgePortfolio(true);
+          enhanced=true;
+          yield {type:'search',phase:'beam-planning',tiles:tiles.slice(),message:'Trying adaptive color priorities and larger bridge plans.'};
+        }
+        const schedule=enhanced?[[beam,400],[bridges,200],[legacy,150]]:[[beam,300],[diagnostic,15],[bridges,10],[legacy,5]];
+        for(const [search,slice] of schedule){
           if(!search)continue;
           let work=0;
-          for(let steps=0;steps<(search===diagnostic||search===beam?512:32);steps++){
+          for(let steps=0;steps<(enhanced||search===diagnostic||search===beam?512:32);steps++){
             const result=advance(search),step=result.step;work+=result.work;
             if(search===legacy)legacyWork+=result.work;
             if(step.done){
@@ -1784,19 +1929,20 @@ function createSplashSearch() {
             }
             if(step.value.type!=='search'){
               closeOthers(search);
+              if(step.value.type==='forward')step.value.strategyLane=search===legacy?'group-planning':search===bridges?'bridge-planning':search===beam?'beam':'diagnostic';
               yield step.value;return yield* search;
             }
             yield step.value;
             if(work>=slice)break;
           }
         }
-        if(legacyWork>=60000){
+        if(legacy&&legacyWork>=(enhanced?15000:60000)){
           legacy.return();legacy=legacyAttempt(++legacyVariant);legacyWork=0;
           yield {type:'search',phase:'planning',tiles:tiles.slice(),
             message:`Trying another group-planning ranking (attempt ${legacyVariant+1}); bridge planning retains its progress.`};
         }
       }
-    }finally{legacy.return();bridges.return();diagnostic?.return();beam?.return();}
+    }finally{legacy?.return();bridges?.return();diagnostic?.return();beam?.return();}
   }
 
   // Restart strategic planning from committed tiles, retaining undo history.

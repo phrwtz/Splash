@@ -1,3 +1,56 @@
+# October 22 current policy: retained group planning and faster beam evaluation
+
+The initial portfolio runs for 210 seconds of computation. The adaptive stage
+keeps seven beam rankings, expanded bridge planning, and group planning together;
+nominal slices are 400/200/150 ms. Group planning retries after 15 seconds of its
+own work. Incremental scoring and bounded occupancy/color-group caches preserve
+candidate order and exact scores. Below-cutoff candidates skip feasibility work.
+
+`node tests/oct22-timeout.cjs` solves the five new original deals with a fixed
+900000 ms computation ceiling and independently replays every move. No solution
+moves are stored in these fixtures or used by the solver.
+
+`node tests/beam-frontier-parity.cjs` compares exact ordered frontiers and scores
+on 30 seeded synthetic graphs with fixed pre-optimization results. The fixtures
+contain test graphs and ranked positions, not Splash solutions or openings.
+
+The new five-board suite passed in 281.1–533.1 seconds, all twelve earlier hard
+boards passed in 179.8–848.6 seconds, and all 24 original boards passed their
+unchanged five-minute cap. Browser new board 3 passed in 520.9 seconds, including
+UI replay, Stop, worker-free fallback, and custom timeout archiving.
+
+The original 24-board and prior twelve-board suites retain their 300000 ms and
+900000 ms caps. See the historical entries below for additional test coverage.
+
+# Current Auto Play policy — adaptive rankings and bounded endgames
+
+Auto Play adds the strategies that cleared the twelve remaining one-hour
+timeouts: varied color priorities and clearance/group weights, bounded exact
+continuations for the best beam candidates with at most 24 occupied cells,
+stronger shared-donor checks, and a larger interacting-bridge planner.
+The established portfolio runs first for four minutes of computation to
+preserve inexpensive wins and the existing five-minute regressions. Harder
+deals then switch to adaptive rankings and the larger bridge frontier.
+Each adaptive ranking retains its own frontier.
+Endgame probes yield, stop after 50,000 calls, and cache only established
+failures. Their exhaustion never proves the original board impossible.
+Rejected helper scans yield as well as accepted planning states, so they cannot
+starve the other strategies or the deadline. All lanes still share the user's computation limit and Stop handling.
+Only a completely verified solution reaches playback. There is no native
+runtime dependency, fixture recognition, stored opening, or saved solution.
+
+`node tests/hard-timeout.cjs` independently solves and replays the twelve
+previously unresolved archive deals with a fifteen-minute computation ceiling.
+It accepts comma-separated IDs and SPLASH_TEST_JOBS (default two workers).
+The fixture contains original deals only. `node tests/beam-search.cjs` checks
+partial boards, bitset boundaries, cancellation, and parity with independent
+64-bit ranking arithmetic. The original 24-board and browser regressions
+remain in `timeout-beam.cjs` and `timeout-beam-browser.cjs`.
+
+Earlier policy below is historical.
+
+---
+
 # Current Auto Play policy — timeout-board beam search
 
 Auto Play includes the beam-search strategy developed for the October 20 batch
@@ -685,3 +738,13 @@ for subsequent writes. Browser download preferences may ask for a location or
 permission for multiple downloads. `node tests/start-autoplay-browser.cjs` tests
 the actual Start buttons, no picker calls, downloaded JSON content after a
 timeout, the Saved boards list/replay, and starting fresh after replay.
+
+
+October 21 adaptive Auto Play validation: all 12 archived one-hour timeout deals
+passed a 15-minute computation cap (203.4–860.4 seconds), with all 480 moves
+independently replayed. All 24 earlier regression deals passed the unchanged
+five-minute cap (12.9–191.0 seconds). Real-browser hard board 14 passed in
+392.6 seconds, including UI move validation; Stop, worker-free fallback, and
+custom timeout/archive checks passed. Reload Splash to load the updated search.
+For these hard deals select a 15-minute limit; timings vary with hardware and
+browser. The default remains five minutes. No saved solution moves are used.

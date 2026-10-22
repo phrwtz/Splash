@@ -24,5 +24,14 @@ let random=971;for(let t=0;t<500;t++){const b=Array.from({length:14},()=>{random
 // Cancellation closes the nested portfolio once both retry lanes have started.
 const raceContext={module:{exports:{}}};vm.runInNewContext(source.replace('return {solve,assess,exportProofCache,restoreProofCache}','return {solve,beamSolve,assess,exportProofCache,restoreProofCache}'),raceContext);
 const race=raceContext.module.exports.beamSolve(['red'],[[]]),widths=new Set();
-for(let i=0;i<2000&&widths.size<3;i++){const e=race.next();assert(!e.done);assert.equal(e.value.type,'search');const m=e.value.message?.match(/beam (\d+)/);if(m)widths.add(Number(m[1]));}
-assert.deepEqual([...widths].sort((a,b)=>a-b),[64,256,512]);assert(race.return().done);assert(race.next().done);console.log('PASS: cooperative standard, wide, and varied retries cancel without partial playback.');
+for(let i=0;i<10000&&widths.size<5;i++){const e=race.next();assert(!e.done);assert.equal(e.value.type,'search');const m=e.value.message?.match(/beam (\d+)/);if(m)widths.add(Number(m[1]));}
+assert.deepEqual([...widths].sort((a,b)=>a-b),[64,128,256,512,1024]);assert(race.return().done);assert(race.next().done);console.log('PASS: cooperative standard, wide, and varied retries cancel without partial playback.');
+
+// The learned color priorities must match the offline unsigned 64-bit arithmetic.
+const priorities={module:{exports:{}}};vm.runInNewContext(source.replace('return {solve,assess,exportProofCache,restoreProofCache}','return {solve,beamColorWeights,assess,exportProofCache,restoreProofCache}'),priorities);
+for(const seed of [1,114,500,501,512,548,65535]){const colors=priorities.module.exports.beamColorWeights(seed,false);for(let c=1;c<7;c++){const mask=(1n<<64n)-1n;let z=((BigInt(seed)*0x9e3779b97f4a7c15n)&mask)^((BigInt(c)*0xbf58476d1ce4e5b9n)&mask);z^=z>>31n;assert.equal(colors[c],.25+Number(z%10000n)/4000);}assert(priorities.module.exports.beamColorWeights(seed,true).every(v=>v===1));}
+console.log('PASS: adaptive color priorities match independent 64-bit arithmetic.');
+
+for(const expandedBridgeSearch of [true,false]){const g=fresh().solve(['red','blue','yellow'],[[1],[0,2],[1]],{hybrid:true,quickPlanMs:0,adaptiveAfterMs:0,expandedBridgeSearch});let step,moves=0,switched=false;while(!(step=g.next()).done){switched||=step.value.message?.includes('adaptive color priorities');if(step.value.type==='forward'){assert(step.value.plan.continuationVerified);moves++;}}assert(switched);assert.equal(step.value,'solved');assert.equal(moves,2);}
+const switchCancel=fresh().solve(['red'],[[]],{hybrid:true,quickPlanMs:0,adaptiveAfterMs:0});switchCancel.next();assert(switchCancel.return().done);assert(switchCancel.next().done);
+console.log('PASS: staged adaptive activation, verified playback, optional bridge lane, and cancellation.');

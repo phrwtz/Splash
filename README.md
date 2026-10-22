@@ -30,24 +30,29 @@ computation). Auto Play then shares computation between:
 
 These searches run cooperatively in short execution slices. Beam search gets
 most of the initial computation budget. This established portfolio runs for the
-first four minutes of solver computation, preserving fast solutions on earlier
+first three and a half minutes of solver computation, preserving fast solutions on earlier
 regression boards.
 
 ### Adaptive search for harder deals
 
-If no strategy has finished after four minutes, Auto Play closes the initial
-searches and switches to two stronger approaches:
+If no strategy has finished after three and a half minutes, Auto Play closes the initial
+searches and switches to three complementary approaches:
 
-- **Five independent beam searches** retain separate frontiers with widths
-  128, 128, 256, 1024, and 1024. Their rankings vary color priorities, clearance
+- **Seven independent beam searches** retain separate frontiers with widths
+  128, 128, 256, 1024, 1024, 512, and 64. Their rankings vary color priorities, clearance
   rewards, group preferences, and seeded variation; one uses equal color
   weights. Separate frontiers keep one ranking from crowding out the others.
 - **Expanded bridge planning** explores more candidate bridge goals, helper
   combinations, and paths, retrying with different rankings.
 
-The adaptive beams share roughly 300-millisecond computation slices with
-200-millisecond slices for expanded bridge planning. Within the beam portfolio,
-smaller slices keep each ranking moving forward.
+- **Retained group planning** continues alongside the other strategies. It
+  restarts with a new ranking after each 15 seconds of its own computation.
+
+The adaptive portfolio shares roughly 400-millisecond beam slices,
+200-millisecond bridge slices, and 150-millisecond group-planning slices.
+Within the beam portfolio, each ranking has its own allocation; the wider
+512-position clearance ranking receives more time because it can uncover
+continuations missed by the other rankings.
 
 For the best 16 candidates in each adaptive beam layer, positions with at most
 24 occupied cells receive an exact endgame probe. Each probe is bounded to
@@ -56,6 +61,10 @@ Only proven failures enter its failure cache: hitting a probe budget means
 “unknown.” Viability checks also reject positions whose remaining ingredients
 and shared donors cannot support the required clearances. Compact bitsets,
 bounded caches, and duplicate-state checks reduce search cost and memory use.
+Incremental scoring updates only removed cells and their neighbors. Bounded
+caches reuse occupancy contributions and unchanged color groups while preserving
+exact scores and candidate order. Once a beam is full, candidates below its
+score cutoff skip expensive feasibility checks.
 
 ### Verification, responsiveness, and time limits
 
@@ -77,7 +86,19 @@ records the original deal and advances according to the selected mode. A time
 limit, failed beam attempt, or bounded endgame probe is never an impossibility
 proof; an “unsolvable” result requires a conclusive proof.
 
-### Validated performance
+### October 22 validated performance
+
+The revised engine solved all five new fifteen-minute timeout deals in
+4m41s, 8m53s, 8m51s, 8m49s, and 5m15s of computation, with all 200 moves
+independently replayed. All 24 original boards passed their unchanged five-minute
+limit. Browser testing of new board 3 passed in about 8m41s, including all
+40 UI-validated moves, Stop, worker-free fallback, and timeout archiving.
+All twelve earlier hard boards also passed the unchanged fifteen-minute cap,
+taking 3m00s–14m09s, with all 480 moves independently replayed. The original
+24-board suite took approximately 11–166 seconds per board. These are measured
+results for these deals; timings vary with hardware and browser.
+
+### Previous validated performance
 
 The October 21, 2026 version solved all twelve archived boards that had
 previously timed out after one hour. Each passed a **fifteen-minute computation
@@ -103,8 +124,10 @@ Useful commands from the project directory include:
 node tests/search.cjs
 node tests/beam-search.cjs
 node tests/beam-endgame.cjs
+node tests/beam-frontier-parity.cjs
 SPLASH_TEST_JOBS=1 node tests/timeout-beam.cjs
 SPLASH_TEST_JOBS=1 node tests/hard-timeout.cjs
+SPLASH_TEST_JOBS=1 node tests/oct22-timeout.cjs
 ```
 
 The hard-board suite uses original deals only, independently validates every

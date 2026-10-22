@@ -14,6 +14,6 @@ if(!isMainThread){
 }else{
  const slots=Number(process.env.SPLASH_TEST_JOBS||2);assert(Number.isSafeInteger(slots)&&slots>0&&slots<=8);
  const selected=process.argv[2]?boards.filter(b=>process.argv[2].split(',').map(Number).includes(b.id)):boards;let cursor=0;const results=[];
- async function slot(){while(cursor<selected.length){const board=selected[cursor++];await new Promise((resolve,reject)=>{const w=new Worker(__filename,{workerData:board});w.on('message',m=>{results.push(m);console.log(JSON.stringify(m));});w.on('error',reject);w.on('exit',code=>code?reject(Error(`Worker ${board.id} exited ${code}`)):resolve());});}}
+ async function slot(){while(cursor<selected.length){const board=selected[cursor++];await new Promise((resolve,reject)=>{const w=new Worker(__filename,{workerData:board,resourceLimits:{maxOldGenerationSizeMb:384}});w.on('message',m=>{results.push(m);console.log(JSON.stringify(m));});w.on('error',reject);w.on('exit',code=>code?reject(Error(`Worker ${board.id} exited ${code}`)):resolve());});}}
  Promise.all(Array.from({length:slots},slot)).then(()=>{require('node:fs').writeFileSync(process.env.SPLASH_BENCHMARK_OUTPUT||'/tmp/splash-beam-benchmark.json',JSON.stringify(results,null,2));console.log(`PASS: ${results.length} formerly timed-out boards solved and independently replayed within the default timeout.`);}).catch(e=>{console.error(e);process.exit(1)});
 }
