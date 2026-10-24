@@ -148,10 +148,9 @@
       <fieldset>
         <legend>Display mode</legend>
         <p><label><input id="auto-play-animation" type="radio" name="auto-play-display" value="animate" checked> Animate moves</label></p>
-        <p><label><input id="auto-play-process" type="radio" name="auto-play-display" value="process"> Display search process</label></p>
         <p><label><input id="auto-play-no-display" type="radio" name="auto-play-display" value="none"> No display</label></p>
       </fieldset>
-      <p>Display search process pauses briefly when the search goal changes. No display updates only the status and timers.</p>
+      <p>No display shows the original board being solved. The board display updates only when a new board starts.</p>
       <div class="saved-timeout-actions"><button id="auto-play-start" type="button">Start Auto Play</button></div>
       <form method="dialog"><button type="submit">Cancel</button></form>
     </dialog>
@@ -167,7 +166,7 @@
       </div>
       <form method="dialog"><button type="submit">Close</button></form>
     </dialog>
-    <script src="search.js?v=20261022-retained-planners-v1"></script>
-    <script src="app.js?v=20261020-beam-v1"></script>
+    <script src="search.js?v=20261024-resource-beam-v2"></script>
+    <script src="app.js?v=20261024-original-board-v1"></script>
   </body>
 </html>

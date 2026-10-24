@@ -1,3 +1,28 @@
+# October 24: shared-ingredient beam lane
+
+The search portfolio adds a width-512 lane with future-secondary
+reachability, capacity checks, and maximum matching of primary tiles to
+missing ingredients. Its reproducible policy stream varies color weights,
+clearance and group rewards, and noise. The original seven adaptive lanes
+remain available. After 60 seconds, the new lane gets up to 90 seconds before
+the established searches resume. The original
+strategies retain their full 210-second allocation before the adaptive
+transition; the bounded donor turn is counted separately. The new lane joins
+the adaptive portfolio with its retained frontier.
+
+- `node tests/resource-beam.cjs` exhaustively checks 17,643 balanced mixed
+  positions on three graph shapes against an independent legal-move oracle,
+  including cells on both sides of the 30-bit boundary. It also compares
+  1,000 ranking hashes with independent BigInt arithmetic.
+- `node tests/oct24-timeout.cjs` searches the original one-hour timeout deal
+  through the full hybrid algorithm, verifies every move independently, and
+  enforces the default five-minute computation limit.
+- Existing beam frontier parity, endgame, worker, Stop, and timeout tests
+  continue to exercise the original strategies and playback guarantees.
+
+The new fixture stores starting colors only. No production search loads
+fixtures, recognizes this deal, or replays a stored continuation.
+
 # October 22 current policy: retained group planning and faster beam evaluation
 
 The initial portfolio runs for 210 seconds of computation. The adaptive stage

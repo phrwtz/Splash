@@ -1459,18 +1459,6 @@ function renderAutoPlaySession() {
   if (layoutChanged) syncGameBoardSize();
 }
 
-function showAutoPlaySearchPosition(event) {
-  if (autoPlayState.displayMode !== 'process') return;
-  autoPlayState.searchView = Array.isArray(event.tiles) ? [...event.tiles] : [...state.tiles];
-  const selected = new Set((event.objective?.cells || []).filter(i => autoPlayState.searchView[i] !== 'white'));
-  // Include every tile in the actual same-color blobs under examination.
-  for (const i of selected) for (const j of getNeighbors(i)) {
-    if (autoPlayState.searchView[j] === autoPlayState.searchView[i]) selected.add(j);
-  }
-  autoPlayState.searchGroup = [...selected];
-  renderInnerTiles();
-}
-
 function autoPlayInterrupted() {
   return !autoPlayState.active || autoPlayState.stopRequested || (autoPlayState.phase === 'search' && autoPlayState.searchComputeMs >= autoPlayState.searchLimitMs);
 }
@@ -1711,16 +1699,13 @@ async function runAutoPlay() {
       startBoardTimerIfNeeded();
       const adjacency = tilesMeta.map(tile => getNeighbors(tile.index));
       const searchOptions = {history: state.history, hybrid: true, batchGroups: 0};
-      // Inspection mode retains deliberate checkpoints. Other modes plan off
-      // the page thread so hidden-tab timer throttling cannot stop the search.
-      let search = (autoPlayState.displayMode !== 'process' &&
-        createAutoPlayPrefetch([...state.tiles], adjacency, state.history)) ||
+      // Plan off the page thread so hidden-tab timer throttling cannot stop the search.
+      let search = createAutoPlayPrefetch([...state.tiles], adjacency, state.history) ||
         createAutoPlayTimedSearch([...state.tiles], adjacency, searchOptions);
       let prefetch = null, batchMovesLeft = 0, silentMoves = 0;
       cancelSearch = () => { search.return(); prefetch?.return(); };
       let result = null;
       let nextPlanningStatus = 0;
-      let lastSearchGoal = null;
       let lastSearchYield = performance.now();
       let searchStepsSinceYield = 0;
       while (!autoPlayInterrupted()) {
@@ -1737,7 +1722,6 @@ async function runAutoPlay() {
             batchMovesLeft = prefetch ? step.value.moveCount : 0;
           }
           autoPlayState.message = step.value.message;
-          showAutoPlaySearchPosition({tiles:step.value.after});
           renderAutoPlaySession();
           if (autoPlayState.animate && !step.value.complete && !await pauseAutoPlayPresentation(1500)) break;
           nextPlanningStatus = performance.now() + 1500;
@@ -1773,22 +1757,14 @@ async function runAutoPlay() {
               (step.value.proofStats ? ` ${step.value.proofStats.cacheHits.toLocaleString()} cached proofs reused; ${step.value.proofStats.commuted.toLocaleString()} equivalent move orders skipped.` +
                 (step.value.proofStats.retainedFailures ? ` ${step.value.proofStats.retainedFailures.toLocaleString()} cached failures retained from earlier searches.` : '') +
                 (step.value.proofStats.failedEvictions ? ` ${step.value.proofStats.failedEvictions.toLocaleString()} old cached failures evicted.` : '') : '') + proofDetail : '';
-          const searchGoal = JSON.stringify([step.value.phase, step.value.restart, objective?.color,
-            objective?.cells?.slice().sort((a,b)=>a-b)]);
-          const goalChanged = searchGoal !== lastSearchGoal;
-          if (step.value.phase === 'complete-search' || step.value.restart || performance.now() >= nextPlanningStatus ||
-              (autoPlayState.displayMode === 'process' && goalChanged)) {
+          if (step.value.phase === 'complete-search' || step.value.restart || performance.now() >= nextPlanningStatus) {
             autoPlayState.message = step.value.message ? `${step.value.message.replace(/no time limit/g, `${autoPlayState.searchLimitMs / 60000}-minute limit`)}${progress}` : `${label}…${progress}`;
             nextPlanningStatus = performance.now() + 1500;
-            showAutoPlaySearchPosition(step.value);
             renderAutoPlaySession();
-            lastSearchGoal = searchGoal;
-            if (autoPlayState.displayMode === 'process' && goalChanged &&
-                !await pauseAutoPlayPresentation(500)) break;
           }
           // Search snapshots stay visible without changing playable tiles/history.
           // Yield to the browser so Stop and the time limit stay responsive.
-          if (!search.runsInWorker && (autoPlayState.displayMode === 'process' || ++searchStepsSinceYield >= 32 ||
+          if (!search.runsInWorker && (++searchStepsSinceYield >= 32 ||
               performance.now()-lastSearchYield >= 16)) {
             await waitForAutoPlayMs(0);
             lastSearchYield = performance.now();
@@ -1800,7 +1776,7 @@ async function runAutoPlay() {
           throw new Error('Auto Play plan does not match the displayed board');
         }
         autoPlayState.searchView = null;
-        autoPlayState.searchGroup = autoPlayState.displayMode === 'process' ? step.value.plan?.cells || [] : [];
+        autoPlayState.searchGroup = [];
         renderInnerTiles();
         if (!await animateSearchEvent(step.value)) break;
         if (prefetch && --batchMovesLeft === 0) {
@@ -3442,7 +3418,7 @@ function renderLandingBoard() {
 function render() {
   renderAutoPlaySession();
   renderAnalysisStatus();
-  // No display keeps the board fixed; resize events still fit it to the window.
+  // Keep the layout steady while each original deal remains on display.
   if (!(autoPlayState.active && autoPlayState.displayMode === 'none')) syncGameBoardSize();
   renderAnalysisGraph();
   maybeCaptureAnalysisMaxState();
@@ -5280,14 +5256,14 @@ function computeBlobKeyFromTile(tileIndex, tiles) {
 }
 
 function renderInnerTiles() {
-  if (autoPlayState.active && autoPlayState.displayMode === 'none') return;
   const draggedSourceIndex = state.dragState.sourceIndex;
   const animatedSourceIndex = demoAnimation.active ? demoAnimation.sourceIndex : null;
 
   const groups = innerLayer.querySelectorAll('.tile-group');
   groups.forEach((group) => {
     const idx = Number(group.getAttribute('data-index'));
-    const color = autoPlayState.searchView?.[idx] ?? state.tiles[idx];
+    const color = autoPlayState.active && autoPlayState.displayMode === 'none'
+      ? state.initialTiles[idx] : autoPlayState.searchView?.[idx] ?? state.tiles[idx];
     const inner = group.querySelector('.inner');
 
     const displayColor = draggedSourceIndex === idx || animatedSourceIndex === idx ? 'white' : color;
@@ -5296,7 +5272,7 @@ function renderInnerTiles() {
     group.classList.toggle('draggable', appState.mode === 'play' && !autoPlayState.active && isMovable(color));
     group.classList.toggle('dragging-source', draggedSourceIndex === idx);
     group.classList.toggle('selected-blob', isSelectedBoardTileInAnalysisBlob(idx));
-    group.classList.toggle('search-selected', autoPlayState.active && autoPlayState.displayMode === 'process' && autoPlayState.searchGroup.includes(idx));
+    group.classList.toggle('search-selected', autoPlayState.active && autoPlayState.displayMode === 'none' && autoPlayState.searchGroup.includes(idx));
     group.setAttribute(
       'aria-label',
       `Row ${tilesMeta[idx].row + 1}, Column ${tilesMeta[idx].col + 1}, ${displayColor} tile`

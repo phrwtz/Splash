@@ -1634,6 +1634,44 @@ function createSplashSearch() {
       return .25+((hi%10000)*7296+lo)%10000/4000;
     });}
 
+  // Reproducible policy stream. BigInt is used only when choosing a new
+  // ranking, never while expanding a position. The offset spreads this lane
+  // away from the established beam seeds; it stores no boards or moves.
+  function resourcePolicyStream() {
+    const mask=(1n<<64n)-1n, state=[11235813n];
+    for(let i=1;i<312;i++)state[i]=(6364136223846793005n*(state[i-1]^(state[i-1]>>62n))+BigInt(i))&mask;
+    let index=312;
+    function next(){
+      if(index===312){for(let i=0;i<312;i++){
+        const x=(state[i]&0xffffffff80000000n)|(state[(i+1)%312]&0x7fffffffn);
+        state[i]=state[(i+156)%312]^(x>>1n)^((x&1n)?0xb5026f5aa96619e9n:0n);
+      }index=0;}
+      let x=state[index++];x^=(x>>29n)&0x5555555555555555n;
+      x^=(x<<17n)&0x71d67fffeda60000n;x^=(x<<37n)&0xfff7eee000000000n;x^=x>>43n;
+      return x&mask;
+    }
+    let variant=0;
+    return ()=>{let policy;do{
+      const seed=next(),colors=Array(7).fill(0);
+      for(let c=1;c<7;c++)colors[c]=Math.fround(.25+Number(next()%400n)/100);
+      policy={seedLo:Number(seed&0xffffffffn),seedHi:Number(seed>>32n),colors,
+        clear:[15,30,45,60][variant%4],group:variant%3===0?.5:2,
+        noise:[40,100,150,300,800][variant%5]};
+    }while(variant++<45);return policy;};
+  }
+  function resourceNoise(board,policy) {
+    function mix(lo,hi){
+      lo^=(lo>>>30)|(hi<<2);hi^=hi>>>30;
+      [lo,hi]=beamMultiply(lo,hi,0x1ce4e5b9,0xbf58476d);
+      lo^=(lo>>>27)|(hi<<5);hi^=hi>>>27;
+      [lo,hi]=beamMultiply(lo,hi,0x133111eb,0x94d049bb);
+      return [(lo^(lo>>>31)^(hi<<1))>>>0,(hi^(hi>>>31))>>>0];
+    }
+    let lo=17,hi=0;
+    for(let c=1;c<7;c++)[lo,hi]=mix(lo^(board[c*2]|((board[c*2+1]&3)<<30)),hi^(board[c*2+1]>>>2));
+    [lo,hi]=mix(lo^policy.seedLo,hi^policy.seedHi);
+    return Math.fround((hi*2097152+(lo>>>11))/9007199254740992);
+  }
   // Bounded beam portfolio used by the offline timeout-board solver. Two
   // 30-bit words represent each color, avoiding BigInt costs in the browser.
   // This is a solution finder only: pruning/exhaustion never proves failure.
@@ -1732,6 +1770,67 @@ function createSplashSearch() {
       }
       return true;
     }
+    // Optimistic future secondary regions give each primary tile routes to
+    // its two missing ingredients. A matching requires distinct donor tiles
+    // across ALL routes, rather than spending one donor several times.
+    // Regions may contain currently unmixed primaries: this overestimates
+    // reachability, which is essential for sound rejection.
+    function resourceViable(b,gs) {
+      const profiles=Array.from({length:7},()=>Array(n).fill(null));
+      const ingredients=[1,2,4].map(bit=>{
+        let lo=0,hi=0;for(let c=1;c<7;c++)if(c&bit){lo|=b[c*2];hi|=b[c*2+1];}return [lo,hi];
+      });
+      for(const s of [3,5,6]){
+        const bits=[1,2,4].filter(c=>c&s);let leftLo=b[s*2]|b[bits[0]*2]|b[bits[1]*2],leftHi=b[s*2+1]|b[bits[0]*2+1]|b[bits[1]*2+1];
+        while(leftLo||leftHi){
+          const [lo,hi]=flood(leftLo?leftLo&-leftLo:0,leftLo?0:leftHi&-leftHi,leftLo,leftHi);leftLo&=~lo;leftHi&=~hi;
+          const capacity=Math.min(...bits.map(bit=>pop(lo&(b[s*2]|b[bit*2]))+pop(hi&(b[s*2+1]|b[bit*2+1]))));
+          const [el,eh]=neighbors(lo,hi),complement=7^s;let sl=el&b[complement*2],sh=eh&b[complement*2+1],dl=0,dh=0;
+          while(sl||sh){const [a,d]=flood(sl?sl&-sl:0,sl?0:sh&-sh,b[complement*2],b[complement*2+1]);dl|=a;dh|=d;sl&=~a;sh&=~d;}
+          const distances=Array(n).fill(Infinity);let wl=lo&neighbors(b[complement*2],b[complement*2+1])[0],wh=hi&neighbors(b[complement*2],b[complement*2+1])[1],vl=0,vh=0,distance=1;
+          while(wl||wh){for(const i of cells(wl,wh))distances[i]=distance;vl|=wl;vh|=wh;const [a,d]=neighbors(wl,wh);wl=a&lo&~vl;wh=d&hi&~vh;distance++;}
+          const region={lo,hi,capacity,dl,dh,distances};for(const i of cells(lo,hi))profiles[s][i]=region;
+          for(const i of cells(lo&b[s*2],hi&b[s*2+1]))if(distances[i]>capacity)return false;
+        }
+      }
+      const demands=Array.from({length:7},()=>[[],[],[]]);
+      for(const g of gs){
+        const color=g.color;if(color!==1&&color!==2&&color!==4)continue;
+        const opposite=7^color,direct=new Set(cells(g.edgeLo,g.edgeHi).map(i=>profiles[opposite][i]).filter(r=>r&&r.capacity>0));
+        const partners=gs.filter(h=>(h.color===1||h.color===2||h.color===4)&&!(color&h.color)&&((g.edgeLo&h.lo)||(g.edgeHi&h.hi)));
+        for(const i of cells(g.lo,g.hi)){
+          const supplies=[[0,0],[0,0],[0,0]];let escape=direct.size>0;
+          for(const r of direct)for(let k=0;k<3;k++){supplies[k][0]|=r.lo&ingredients[k][0];supplies[k][1]|=r.hi&ingredients[k][1];}
+          for(const h of partners){const s=color|h.color,r=profiles[s][i];if(!r)continue;
+            let distance=r.distances[i];for(const j of cells(h.lo,h.hi))distance=Math.min(distance,r.distances[j]);
+            if(distance>r.capacity)continue;escape=true;
+            for(let k=0;k<3;k++)if(!(color&(1<<k))){supplies[k][0]|=(s&(1<<k))?h.lo:r.dl;supplies[k][1]|=(s&(1<<k))?h.hi:r.dh;}
+          }
+          if(!escape)return false;
+          for(let k=0;k<3;k++)if(!(color&(1<<k)))demands[color][k].push(supplies[k]);
+        }
+      }
+      for(const color of [1,2,4])for(const list of demands[color]){
+        const matched=Array(n).fill(-1);
+        function assign(i,seen){for(const j of cells(list[i][0],list[i][1])){
+          if(seen[j])continue;seen[j]=true;
+          if(matched[j]<0||assign(matched[j],seen)){matched[j]=i;return true;}
+        }return false;}
+        for(let i=0;i<list.length;i++)if(!assign(i,Array(n).fill(false)))return false;
+      }
+      return true;
+    }
+    const nextResourcePolicy=configuration.resourceMatching?resourcePolicyStream():null;
+    let resourcePolicy=null;
+    function resourceRank(b,lo,hi,gs){
+      let score=Math.fround(-resourcePolicy.clear*(pop(lo)+pop(hi)));
+      for(const g of gs){
+        score=Math.fround(score+Math.fround(Math.fround(Math.fround(resourcePolicy.group*resourcePolicy.colors[g.color])*g.size)*g.size));
+        if(g.color===1||g.color===2||g.color===4){let a=0,d=0;for(let c=1;c<7;c++)if(!(c&g.color)){a|=b[c*2];d|=b[c*2+1];}if(!((g.edgeLo&a)||(g.edgeHi&d)))return -Infinity;}
+      }
+      for(const term of occupancyScore(lo,hi))score=Math.fround(score+term);
+      return Math.fround(score+Math.fround(resourceNoise(b,resourcePolicy)*resourcePolicy.noise));
+    }
     const key=b=>String.fromCharCode(b[2]&65535,b[2]>>>16,b[3]&65535,b[3]>>>16,b[4]&65535,b[4]>>>16,b[5]&65535,b[5]>>>16,b[6]&65535,b[6]>>>16,b[7]&65535,b[7]>>>16,b[8]&65535,b[8]>>>16,b[9]&65535,b[9]>>>16,b[10]&65535,b[10]>>>16,b[11]&65535,b[11]>>>16,b[12]&65535,b[12]>>>16,b[13]&65535,b[13]>>>16);
     const occupancyScores=boundedMap(8192);
     function occupancyScore(lo,hi){
@@ -1763,7 +1862,7 @@ function createSplashSearch() {
           const source=dir?y:x,target=dir?x:y,sc=dir?h.color:g.color,tc=dir?g.color:h.color,mix=sc|tc,next=b.slice();
           next[sc*2+halves[source]]&=~bits[source];next[tc*2+halves[target]]&=~bits[target];if(mix!==7)next[mix*2+halves[target]]|=bits[target];
           const nk=key(next);if(seen.has(nk))continue;seen.add(nk);
-          const [a,d]=occupancy(next),score=rank(next,a,d,colorGroups(next),true,weights);
+          const [a,d]=occupancy(next),score=configuration.resourceMatching?resourceRank(next,a,d,colorGroups(next)):rank(next,a,d,colorGroups(next),true,weights);
           if(score!==-Infinity)moves.push({source,target,board:next,score});
         }
       }
@@ -1776,6 +1875,7 @@ function createSplashSearch() {
     let checked=0;
     const tailDead=new Set();
     for(let attempt=0;;attempt++){
+      if(nextResourcePolicy)resourcePolicy=nextResourcePolicy();
       const setting=configuration.adaptiveTail?configuration:null;
       const width=setting?.width??configuration.width,diverse=configuration.diverse??true;
       const seed=setting?setting.seed+attempt:configuration.seed+attempt;
@@ -1803,13 +1903,15 @@ function createSplashSearch() {
             const [lo,hi]=occupancy(b),node={board:b,parent,source,target,key:k,score:0};
             if(!lo&&!hi){winner=node;break expansion;}
             if(!configuration.adaptiveTail&&!viable(b,lo,hi))continue;
-            let score=rank(b,lo,hi,colorGroups(b),diverse,weights);if(score===-Infinity)continue;
-            if(noise)score+=beamNoise(b,seed)*noise;
+            const gsNext=colorGroups(b);
+            let score=configuration.resourceMatching?resourceRank(b,lo,hi,gsNext):rank(b,lo,hi,gsNext,diverse,weights);if(score===-Infinity)continue;
+            if(noise&&!configuration.resourceMatching)score+=beamNoise(b,seed)*noise;
             // A candidate below a full beam's cutoff cannot be retained even
             // if viable. Defer expensive ingredient/donor checks until needed.
             if(configuration.adaptiveTail){
               if(heap.length>=width&&score<=heap[0].score)continue;
               if(!viable(b,lo,hi))continue;
+              if(configuration.resourceMatching&&!resourceViable(b,gsNext))continue;
             }
             node.score=score;keep(node);
           }
@@ -1818,9 +1920,10 @@ function createSplashSearch() {
         if(!heap.length)break;
         frontier=heap.sort((a,b)=>b.score-a.score);
         if(configuration.adaptiveTail){
-          for(const node of frontier.slice(0,16)){
-            const [lo,hi]=occupancy(node.board);if(pop(lo)+pop(hi)>24)continue;
-            const path=yield* exactTail(node.board,{left:50000},weights);
+          const probeCandidates=frontier.slice(0,16);
+          for(const node of (configuration.resourceMatching?probeCandidates.slice(0,8):probeCandidates)){
+            const [lo,hi]=occupancy(node.board);if(pop(lo)+pop(hi)>(configuration.resourceMatching?20:24)||configuration.resourceMatching&&depth<24)continue;
+            const path=yield* exactTail(node.board,{left:configuration.resourceMatching?15000:50000},weights);
             if(path!==null&&path!==undefined){winner=node;tailPath=path;break;}
           }
         }
@@ -1879,10 +1982,14 @@ function createSplashSearch() {
       sectionStates:options.sectionStates??120000,
       frontierStates:options.frontierStates??4096});
     let beam=options.beamSearch===false?null:beamSolve(tiles,adjacency,null,false);
+    let resources=options.beamSearch===false?null:beamSolve(tiles,adjacency,{width:512,adaptiveTail:true,resourceMatching:true});
+    let resourceWarmupDone=false,resourceWarmupWork=0;
+    const resourceAfterMs=options.resourceAfterMs??60000,resourceWarmupMs=options.resourceWarmupMs??90000;
+    for(const [key,value] of Object.entries({resourceAfterMs,resourceWarmupMs}))if(!Number.isFinite(value)||value<0)throw new RangeError(`${key} must be nonnegative and finite`);
     let enhanced=false,portfolioWork=0;
     const adaptiveAfterMs=options.adaptiveAfterMs??210000;
     if(!Number.isFinite(adaptiveAfterMs)||adaptiveAfterMs<0)throw new RangeError('adaptiveAfterMs must be nonnegative and finite');
-    const closeOthers=winner=>{for(const search of [legacy,bridges,diagnostic,beam])if(search&&search!==winner)search.return();};
+    const closeOthers=winner=>{for(const search of [legacy,bridges,diagnostic,beam,resources])if(search&&search!==winner)search.return();};
     const advance=search=>{
       const started=Date.now(),step=search.next(),work=Math.max(0,Date.now()-started);portfolioWork+=work;
       return {step,work};
@@ -1906,14 +2013,28 @@ function createSplashSearch() {
         // Preserve the established five-minute regressions: most finish in
         // this initial portfolio. Harder deals then get the learned rankings
         // and larger bridge frontier without retaining duplicate beam caches.
-        if(!enhanced&&beam&&portfolioWork>=adaptiveAfterMs){
-          closeOthers(null);legacyVariant=0;legacy=legacyAttempt(0);legacyWork=0;diagnostic=null;
+        // Leave common deals on their established fast path. A bounded,
+        // uninterrupted turn lets the donor-aware frontier finish useful work
+        // before it joins the longer-running adaptive portfolio.
+        if(resources&&!resourceWarmupDone&&portfolioWork>=resourceAfterMs){
+          resourceWarmupDone=true;let work=0;
+          while(work<resourceWarmupMs){
+            const result=advance(resources),step=result.step;work+=result.work;resourceWarmupWork+=result.work;
+            if(step.done){if(step.value!=='unknown')return step.value;resources=null;break;}
+            if(step.value.type!=='search'){
+              closeOthers(resources);step.value.strategyLane='resource-beam';yield step.value;return yield* resources;
+            }
+            yield step.value;
+          }
+        }
+        if(!enhanced&&beam&&portfolioWork-resourceWarmupWork>=adaptiveAfterMs){
+          closeOthers(resources);legacyVariant=0;legacy=legacyAttempt(0);legacyWork=0;diagnostic=null;
           beam=beamSolve(tiles,adjacency,{adaptive:true});
           bridges=options.expandedBridgeSearch===false?null:bridgePortfolio(true);
           enhanced=true;
           yield {type:'search',phase:'beam-planning',tiles:tiles.slice(),message:'Trying adaptive color priorities and larger bridge plans.'};
         }
-        const schedule=enhanced?[[beam,400],[bridges,200],[legacy,150]]:[[beam,300],[diagnostic,15],[bridges,10],[legacy,5]];
+        const schedule=enhanced?[[beam,400],[resources,120],[bridges,200],[legacy,150]]:[[beam,300],[diagnostic,15],[bridges,10],[legacy,5]];
         for(const [search,slice] of schedule){
           if(!search)continue;
           let work=0;
@@ -1924,12 +2045,13 @@ function createSplashSearch() {
               if(step.value!=='unknown')return step.value;
               if(search===beam)beam=null;
               else if(search===diagnostic)diagnostic=null;
+              else if(search===resources)resources=null;
               else if(search===legacy){legacy=legacyAttempt(++legacyVariant);legacyWork=0;}
               break;
             }
             if(step.value.type!=='search'){
               closeOthers(search);
-              if(step.value.type==='forward')step.value.strategyLane=search===legacy?'group-planning':search===bridges?'bridge-planning':search===beam?'beam':'diagnostic';
+              if(step.value.type==='forward')step.value.strategyLane=search===legacy?'group-planning':search===bridges?'bridge-planning':search===beam?'beam':search===resources?'resource-beam':'diagnostic';
               yield step.value;return yield* search;
             }
             yield step.value;
@@ -1942,7 +2064,7 @@ function createSplashSearch() {
             message:`Trying another group-planning ranking (attempt ${legacyVariant+1}); bridge planning retains its progress.`};
         }
       }
-    }finally{legacy?.return();bridges?.return();diagnostic?.return();beam?.return();}
+    }finally{legacy?.return();bridges?.return();diagnostic?.return();beam?.return();resources?.return();}
   }
 
   // Restart strategic planning from committed tiles, retaining undo history.
