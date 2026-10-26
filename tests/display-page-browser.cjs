@@ -16,18 +16,20 @@ await p.evaluate(()=>{Object.assign(autoPlayState.session,{solved:7,unsolvable:2
 assert.deepEqual(await p.locator('.auto-play-stats > span:visible').allTextContents(),['Solved: 7','Proved unsolvable: 2','Timed out: 3']);
 await p.evaluate(()=>{
   const timer=document.getElementById('display-search-time');
-  const original={phase:autoPlayState.phase,searchStartedAt:autoPlayState.searchStartedAt};
-  autoPlayState.phase='search';
-  autoPlayState.searchStartedAt=performance.now()-900;renderAutoPlaySession();
-  assertTimer(timer.classList.contains('hidden'),'hidden before one second');
-  autoPlayState.searchStartedAt=performance.now()-1340;renderAutoPlaySession();
-  assertTimer(!timer.classList.contains('hidden') && timer.textContent==='Searching for 1.3 seconds','rounds elapsed time to tenths');
-  autoPlayState.searchStartedAt=performance.now()-1360;renderAutoPlaySession();
-  assertTimer(timer.textContent==='Searching for 1.4 seconds','rounds up to nearest tenth');
+  const original={searchStartedAt:autoPlayState.searchStartedAt,searchEndedAt:autoPlayState.searchEndedAt,displaySearchEndedAt:autoPlayState.displaySearchEndedAt};
+  autoPlayState.searchEndedAt=null;autoPlayState.displaySearchEndedAt=null;
   autoPlayState.searchStartedAt=performance.now();renderAutoPlaySession();
-  assertTimer(timer.classList.contains('hidden') && !timer.textContent,'resets for the next search');
-  autoPlayState.searchStartedAt=performance.now()-5000;autoPlayState.phase='result';renderAutoPlaySession();
-  assertTimer(timer.classList.contains('hidden'),'hidden after search completes');
+  assertTimer(!timer.classList.contains('hidden') && timer.textContent==='Searching for 0.0 seconds','visible from search start');
+  autoPlayState.searchStartedAt=performance.now()-1340;renderAutoPlaySession();
+  assertTimer(timer.textContent==='Searching for 1.3 seconds','rounds elapsed time to tenths');
+  autoPlayState.displaySearchEndedAt=autoPlayState.searchStartedAt+1360;renderAutoPlaySession();
+  assertTimer(timer.textContent==='Searched for 1.4 seconds','completed search remains visible during playback');
+  autoPlayState.searchEndedAt=autoPlayState.displaySearchEndedAt+5000;renderAutoPlaySession();
+  assertTimer(timer.textContent==='Searched for 1.4 seconds','animation does not increase completed search time');
+  autoPlayState.searchStartedAt=performance.now();autoPlayState.searchEndedAt=null;autoPlayState.displaySearchEndedAt=null;renderAutoPlaySession();
+  assertTimer(timer.textContent==='Searching for 0.0 seconds','resets for next board');
+  autoPlayState.searchEndedAt=autoPlayState.searchStartedAt+30;renderAutoPlaySession();
+  assertTimer(timer.textContent==='Searched for 0.0 seconds','very short searches remain visible');
   Object.assign(autoPlayState,original);renderAutoPlaySession();
   function assertTimer(ok,message){if(!ok)throw Error(message);}
 });

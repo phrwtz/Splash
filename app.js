@@ -446,6 +446,7 @@ const autoPlayState = {
   searchComputeMs: 0,
   searchStartedAt: null,
   searchEndedAt: null,
+  displaySearchEndedAt: null,
   searchPausedMs: 0,
   presentationStartedAt: null,
   searchView: null,
@@ -1453,10 +1454,11 @@ function renderAutoPlaySession() {
   document.getElementById('auto-play-elapsed').textContent = formatElapsedTimer(elapsed);
   const displaySearchTime = document.getElementById('display-search-time');
   if (displaySearchTime) {
-    const elapsedMs = autoPlayState.searchStartedAt == null ? 0 : performance.now() - autoPlayState.searchStartedAt;
-    const searching = autoPlayState.active && autoPlayState.phase === 'search' && elapsedMs > 1000;
-    displaySearchTime.classList.toggle('hidden', !searching);
-    displaySearchTime.textContent = searching ? `Searching for ${(elapsedMs / 1000).toFixed(1)} seconds` : '';
+    const endedAt = autoPlayState.displaySearchEndedAt ?? autoPlayState.searchEndedAt;
+    const elapsedMs = autoPlayState.searchStartedAt == null ? 0 : (endedAt ?? performance.now()) - autoPlayState.searchStartedAt;
+    const visible = autoPlayState.searchStartedAt != null;
+    displaySearchTime.classList.toggle('hidden', !visible);
+    displaySearchTime.textContent = visible ? `${endedAt == null ? 'Searching' : 'Searched'} for ${(Math.max(0, elapsedMs) / 1000).toFixed(1)} seconds` : '';
   }
   const searchElapsed = autoPlayState.searchComputeMs;
   document.getElementById('auto-play-search-elapsed').textContent = `${(searchElapsed / 1000).toFixed(2)} seconds`;
@@ -1698,6 +1700,7 @@ async function runAutoPlay() {
   autoPlayState.searchGroup = [];
   autoPlayState.searchStartedAt = performance.now();
   autoPlayState.searchEndedAt = null;
+  autoPlayState.displaySearchEndedAt = null;
   autoPlayState.searchPausedMs = 0;
   autoPlayState.searchComputeMs = 0;
   let cancelSearch = null;
@@ -1705,6 +1708,7 @@ async function runAutoPlay() {
   try {
     while (!autoPlayState.stopRequested) {
       autoPlayState.phase = 'search';
+      renderAutoPlaySession();
 
       autoPlayState.message = 'Planning clearances…';
       startBoardTimerIfNeeded();
@@ -1788,6 +1792,9 @@ async function runAutoPlay() {
         }
         autoPlayState.searchView = null;
         autoPlayState.searchGroup = [];
+        // A verified continuation is ready: freeze its search time throughout playback.
+        autoPlayState.displaySearchEndedAt ??= performance.now();
+        renderAutoPlaySession();
         renderInnerTiles();
         if (!await animateSearchEvent(step.value)) break;
         if (prefetch && --batchMovesLeft === 0) {
@@ -1851,6 +1858,7 @@ async function runAutoPlay() {
       const fresh = createShuffledBoard();
       autoPlayState.searchStartedAt = performance.now();
       autoPlayState.searchEndedAt = null;
+      autoPlayState.displaySearchEndedAt = null;
       autoPlayState.searchPausedMs = 0;
       autoPlayState.searchComputeMs = 0;
       state.tiles = fresh;
