@@ -186,4 +186,4 @@ suite retains its five-minute ceiling.
 
 ## Display page
 
-Open `https://phrwtz.github.io/Splash/Display/` for an unattended animated Auto Play display. It starts automatically with a one-minute computation limit per board, hides instructions and controls, and retains live search messages and every session statistic. Proven-unsolvable boards advance to the next deal in this page. The main game remains at `/Splash/`.
+Open `https://phrwtz.github.io/Splash/Display/` for an unattended animated Auto Play display. It starts automatically with a one-minute computation limit per board, hides instructions and controls, and shows “Solving Splash Boards” with only the Solved, Proved unsolvable, and Timed out counts. Proven-unsolvable boards advance to the next deal in this page. The main game remains at `/Splash/`.
