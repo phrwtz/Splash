@@ -87,6 +87,7 @@
             <button id="undo-btn" type="button">Undo</button>
             <button id="reset-btn" type="button">Reset</button>
             <button id="new-board-btn" type="button">New Board</button>
+            <button id="save-board-btn" class="hidden" type="button">Save Board</button>
             <button id="saved-timeouts-btn" class="hidden" type="button">Saved boards</button>
             <button id="auto-play-btn" class="hidden" type="button">Auto Play</button>
             <button id="clear-board-btn" class="hidden" type="button">Clear Board</button>
@@ -156,7 +157,7 @@
     </dialog>
     <dialog id="saved-timeouts-dialog" aria-labelledby="saved-timeouts-title">
       <h2 id="saved-timeouts-title">Saved boards</h2>
-      <p>Proven-unsolvable boards and previously timed-out boards are saved here. Select a board, then choose Play this board to try solving it yourself. Playing one stops Auto Play. Clear this board removes it from this list.</p>
+      <p>Manually saved boards, proven-unsolvable boards, and previously timed-out boards are saved here. Use Save Board to save the currently displayed position. Select a board, then choose Play this board to try solving it yourself. Playing one stops Auto Play. Clear this board removes it from this list.</p>
       <p id="saved-timeouts-storage" role="status"></p>
       <p><button type="button" data-archive-action="open">Open board archive</button> <button type="button" data-archive-action="create">Save boards to new archive</button></p>
       <div id="saved-timeouts-list"></div>

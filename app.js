@@ -262,9 +262,8 @@ function readSavedTimedOutBoards() {
   }
 }
 
-function saveTimedOutBoard(outcome = 'timed-out') {
-  // Store the original deal, including cells cleared before Auto Play started.
-  savedTimedOutBoards.unshift({savedAt: Date.now(), outcome, tiles: [...state.initialTiles]});
+function saveTimedOutBoard(outcome = 'timed-out', tiles = state.initialTiles) {
+  savedTimedOutBoards.unshift({savedAt: Date.now(), outcome, tiles: [...tiles]});
   const saving = writeBoardArchive();
   saving.catch(error => {
     savedTimeoutStorageWarning = `File save failed: ${error.message}. Keep this page open and choose an archive to retry.`;
@@ -285,7 +284,7 @@ function renderSavedTimedOutBoards() {
   const list = document.getElementById('saved-timeouts-list');
   list.replaceChildren();
   if (!savedTimedOutBoards.length) {
-    const empty = document.createElement('p'); empty.textContent = 'No unsolvable or timed-out boards saved yet.'; list.append(empty);
+    const empty = document.createElement('p'); empty.textContent = 'No boards saved yet.'; list.append(empty);
   }
   savedTimedOutBoards.forEach((entry, index) => {
     const row = document.createElement('label'); row.className = 'saved-timeout-row';
@@ -314,7 +313,7 @@ function renderSavedTimedOutBoards() {
       updateSavedBoardActions();
     });
     const label = document.createElement('span');
-    label.textContent = `Board ${savedTimedOutBoards.length-index} — ${entry.outcome === 'unsolvable' ? 'Unsolvable' : 'Timed out'} — ${new Date(entry.savedAt).toLocaleString()}`;
+    label.textContent = `Board ${savedTimedOutBoards.length-index} — ${entry.outcome === 'saved' ? 'Saved manually' : entry.outcome === 'unsolvable' ? 'Unsolvable' : 'Timed out'} — ${new Date(entry.savedAt).toLocaleString()}`;
     row.append(checkbox, label); list.append(row);
   });
   updateSavedBoardActions();
@@ -656,6 +655,11 @@ newBoardBtn?.addEventListener('click', () => {
   render();
 });
 
+document.getElementById('save-board-btn')?.addEventListener('click', () => {
+  if (!isAutoPlayAvailable() || isAnalysisTransferAnimating() || autoPlayState.active) return;
+  void saveTimedOutBoard('saved', state.tiles);
+});
+
 document.getElementById('saved-timeouts-btn')?.addEventListener('click', () => {
   selectedTimedOutBoards.clear(); timedOutSelectionAnchor = null;
   document.getElementById('saved-timeouts-dialog').showModal();
@@ -695,9 +699,8 @@ document.getElementById('auto-play-start')?.addEventListener('click', () => {
   autoPlayState.searchLimitMs = searchLimitMs;
   autoPlayState.displayMode = document.querySelector('input[name="auto-play-display"]:checked').value;
   autoPlayState.animate = autoPlayState.displayMode === 'animate';
-  // Every explicit Start begins with a fresh random deal, independent of the
-  // board selected for manual play in Saved boards.
-  state.tiles = createShuffledBoard();
+  // Search the displayed position; only an empty board needs a fresh deal.
+  if (state.tiles.every(color => color === 'white')) state.tiles = createShuffledBoard();
   state.initialTiles = [...state.tiles];
   state.history = [];
   state.dragState = createEmptyDragState();
@@ -983,6 +986,7 @@ function updatePlayVariantUi() {
   analysisGraphWrap?.classList.toggle('hidden', !inGamePlayView);
   autoPlayBtn?.classList.toggle('hidden', !inRegularPlayView);
   document.getElementById('saved-timeouts-btn')?.classList.toggle('hidden', !inRegularPlayView);
+  document.getElementById('save-board-btn')?.classList.toggle('hidden', !inRegularPlayView);
   clearBoardBtn?.classList.toggle('hidden', appState.playVariant !== 'analysis');
   if (!inGamePlayView) {
     clearAnalysisMixFeedback();
@@ -5477,7 +5481,7 @@ function updateUndoButtonState() {
 }
 
 function updateClearBoardButtonState() {
-  for (const button of [resetBtn, newBoardBtn, analysisBtn, playDemoBtn]) {
+  for (const button of [resetBtn, newBoardBtn, analysisBtn, playDemoBtn, document.getElementById('save-board-btn')]) {
     if (button) button.disabled = autoPlayState.active;
   }
   const savedButton = document.getElementById('saved-timeouts-btn');
