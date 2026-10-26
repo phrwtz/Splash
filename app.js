@@ -1454,7 +1454,7 @@ function renderAutoPlaySession() {
   const displaySearchTime = document.getElementById('display-search-time');
   if (displaySearchTime) {
     const elapsedMs = autoPlayState.searchStartedAt == null ? 0 : performance.now() - autoPlayState.searchStartedAt;
-    const searching = autoPlayState.active && autoPlayState.phase === 'search' && elapsedMs > 2000;
+    const searching = autoPlayState.active && autoPlayState.phase === 'search' && elapsedMs > 1000;
     displaySearchTime.classList.toggle('hidden', !searching);
     displaySearchTime.textContent = searching ? `Searching for ${(elapsedMs / 1000).toFixed(1)} seconds` : '';
   }

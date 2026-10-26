@@ -18,12 +18,12 @@ await p.evaluate(()=>{
   const timer=document.getElementById('display-search-time');
   const original={phase:autoPlayState.phase,searchStartedAt:autoPlayState.searchStartedAt};
   autoPlayState.phase='search';
-  autoPlayState.searchStartedAt=performance.now()-1900;renderAutoPlaySession();
-  assertTimer(timer.classList.contains('hidden'),'hidden before two seconds');
-  autoPlayState.searchStartedAt=performance.now()-2340;renderAutoPlaySession();
-  assertTimer(!timer.classList.contains('hidden') && timer.textContent==='Searching for 2.3 seconds','rounds elapsed time to tenths');
-  autoPlayState.searchStartedAt=performance.now()-2360;renderAutoPlaySession();
-  assertTimer(timer.textContent==='Searching for 2.4 seconds','rounds up to nearest tenth');
+  autoPlayState.searchStartedAt=performance.now()-900;renderAutoPlaySession();
+  assertTimer(timer.classList.contains('hidden'),'hidden before one second');
+  autoPlayState.searchStartedAt=performance.now()-1340;renderAutoPlaySession();
+  assertTimer(!timer.classList.contains('hidden') && timer.textContent==='Searching for 1.3 seconds','rounds elapsed time to tenths');
+  autoPlayState.searchStartedAt=performance.now()-1360;renderAutoPlaySession();
+  assertTimer(timer.textContent==='Searching for 1.4 seconds','rounds up to nearest tenth');
   autoPlayState.searchStartedAt=performance.now();renderAutoPlaySession();
   assertTimer(timer.classList.contains('hidden') && !timer.textContent,'resets for the next search');
   autoPlayState.searchStartedAt=performance.now()-5000;autoPlayState.phase='result';renderAutoPlaySession();
