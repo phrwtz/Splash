@@ -1831,7 +1831,7 @@ async function runAutoPlay() {
         state.history = [];
         state.dragState = createEmptyDragState();
         undoCount = 0;
-        if (result === 'unsolvable' && autoPlayState.animate) break;
+        if (result === 'unsolvable' && autoPlayState.animate && !document.body.classList.contains('display-page')) break;
       }
       render();
       if (autoPlayState.animate) {

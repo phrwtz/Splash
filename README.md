@@ -183,3 +183,7 @@ SPLASH_TEST_JOBS=1 node tests/oct24-timeout.cjs
 The hard-board suite uses original deals only, independently validates every
 move, and enforces the fifteen-minute computation ceiling. The earlier-board
 suite retains its five-minute ceiling.
+
+## Display page
+
+Open `https://phrwtz.github.io/Splash/Display/` for an unattended animated Auto Play display. It starts automatically with a one-minute computation limit per board, hides instructions and controls, and retains live search messages and every session statistic. Proven-unsolvable boards advance to the next deal in this page. The main game remains at `/Splash/`.

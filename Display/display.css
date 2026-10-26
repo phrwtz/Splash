@@ -1,0 +1,11 @@
+/* Keep the live search text and board; hide explanatory panels and controls. */
+.display-page .topbar,
+.display-page .controls,
+.display-page #no-moves-notice,
+.display-page dialog,
+.display-page #analysis-graph-wrap,
+.display-page #analysis-palette { display: none !important; }
+.display-page { --board-render-width: min(88vw, 780px, calc((100dvh - 220px) * 1.14)); }
+.display-page .auto-play-session { border: 0; background: transparent; padding: 0; border-radius: 0; }
+.display-page #auto-play-status { overflow-wrap: anywhere; }
+.display-page .board-layout { pointer-events: none; }
