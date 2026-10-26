@@ -1451,6 +1451,13 @@ function renderAutoPlaySession() {
   if (!session) return;
   const elapsed = (session.endedAt ?? performance.now()) - session.startedAt;
   document.getElementById('auto-play-elapsed').textContent = formatElapsedTimer(elapsed);
+  const displaySearchTime = document.getElementById('display-search-time');
+  if (displaySearchTime) {
+    const elapsedMs = autoPlayState.searchStartedAt == null ? 0 : performance.now() - autoPlayState.searchStartedAt;
+    const searching = autoPlayState.active && autoPlayState.phase === 'search' && elapsedMs > 2000;
+    displaySearchTime.classList.toggle('hidden', !searching);
+    displaySearchTime.textContent = searching ? `Searching for ${(elapsedMs / 1000).toFixed(1)} seconds` : '';
+  }
   const searchElapsed = autoPlayState.searchComputeMs;
   document.getElementById('auto-play-search-elapsed').textContent = `${(searchElapsed / 1000).toFixed(2)} seconds`;
   document.getElementById('auto-play-solved').textContent = String(session.solved);
@@ -1686,7 +1693,7 @@ async function runAutoPlay() {
   state.dragState = createEmptyDragState();
   undoCount = 0;
   hideMoveError(true);
-  const tick = window.setInterval(renderAutoPlaySession, 250);
+  const tick = window.setInterval(renderAutoPlaySession, document.body.classList.contains('display-page') ? 100 : 250);
   autoPlayState.searchView = null;
   autoPlayState.searchGroup = [];
   autoPlayState.searchStartedAt = performance.now();

@@ -14,6 +14,23 @@ assert.equal(await p.locator('.display-title').innerText(),'Solving Splash Board
 assert.equal(await p.locator('.auto-play-stats > span:visible').count(),3);
 await p.evaluate(()=>{Object.assign(autoPlayState.session,{solved:7,unsolvable:2,unknown:3});renderAutoPlaySession();});
 assert.deepEqual(await p.locator('.auto-play-stats > span:visible').allTextContents(),['Solved: 7','Proved unsolvable: 2','Timed out: 3']);
+await p.evaluate(()=>{
+  const timer=document.getElementById('display-search-time');
+  const original={phase:autoPlayState.phase,searchStartedAt:autoPlayState.searchStartedAt};
+  autoPlayState.phase='search';
+  autoPlayState.searchStartedAt=performance.now()-1900;renderAutoPlaySession();
+  assertTimer(timer.classList.contains('hidden'),'hidden before two seconds');
+  autoPlayState.searchStartedAt=performance.now()-2340;renderAutoPlaySession();
+  assertTimer(!timer.classList.contains('hidden') && timer.textContent==='Searching for 2.3 seconds','rounds elapsed time to tenths');
+  autoPlayState.searchStartedAt=performance.now()-2360;renderAutoPlaySession();
+  assertTimer(timer.textContent==='Searching for 2.4 seconds','rounds up to nearest tenth');
+  autoPlayState.searchStartedAt=performance.now();renderAutoPlaySession();
+  assertTimer(timer.classList.contains('hidden') && !timer.textContent,'resets for the next search');
+  autoPlayState.searchStartedAt=performance.now()-5000;autoPlayState.phase='result';renderAutoPlaySession();
+  assertTimer(timer.classList.contains('hidden'),'hidden after search completes');
+  Object.assign(autoPlayState,original);renderAutoPlaySession();
+  function assertTimer(ok,message){if(!ok)throw Error(message);}
+});
 await p.waitForTimeout(1000);assert.deepEqual(errors,[]);
 await p.setViewportSize({width:390,height:844});
 assert.equal(await p.locator('#auto-play-status').isVisible(),false);

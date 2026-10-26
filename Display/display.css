@@ -15,3 +15,5 @@
 .display-subtitle { margin: 0 0 18px; text-align: center; line-height: 1.5; text-wrap: balance; }
 .display-subtitle > span { display: inline-block; max-width: 100%; }
 .display-page .board-layout { pointer-events: none; }
+
+#display-search-time { margin: 8px 0 0; font-variant-numeric: tabular-nums; }
