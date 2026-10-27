@@ -181,8 +181,9 @@ const state = {
 };
 state.initialTiles = [...state.tiles];
 const SAVED_TIMEOUTS_KEY = 'splash.timedOutBoards.v1';
+const boardSavingEnabled = !document.body.classList.contains('display-page');
 let savedTimeoutStorageWarning = '';
-let savedTimedOutBoards = readSavedTimedOutBoards();
+let savedTimedOutBoards = boardSavingEnabled ? readSavedTimedOutBoards() : [];
 const selectedTimedOutBoards = new Set();
 let timedOutSelectionAnchor = null;
 let loadingTimedOutBoard = false;
@@ -192,6 +193,7 @@ let savedBoardsFile = null;
 let archiveWrites = Promise.resolve();
 
 function writeBoardArchive() {
+  if (!boardSavingEnabled) return Promise.resolve();
   const contents = JSON.stringify({format: 'splash-boards-v1', boards: savedTimedOutBoards}, null, 2);
   if (!savedBoardsFile) {
     // A static page cannot silently overwrite arbitrary files. Save a portable
@@ -263,6 +265,7 @@ function readSavedTimedOutBoards() {
 }
 
 function saveTimedOutBoard(outcome = 'timed-out', tiles = state.initialTiles) {
+  if (!boardSavingEnabled) return Promise.resolve();
   savedTimedOutBoards.unshift({savedAt: Date.now(), outcome, tiles: [...tiles]});
   const saving = writeBoardArchive();
   saving.catch(error => {
@@ -1837,7 +1840,7 @@ async function runAutoPlay() {
         autoPlayState.session.maxSolveMs = Math.max(autoPlayState.session.maxSolveMs ?? 0, autoPlayState.searchComputeMs);
       }
       if (result === 'unsolvable' || result === 'unknown') await saveTimedOutBoard(result === 'unknown' ? 'timed-out' : 'unsolvable');
-      autoPlayState.message = result === 'solved' ? 'Solution found!' : result === 'unknown' ? `${autoPlayState.searchLimitMs / 60000}-minute limit reached; board saved to archive.` : 'Board is unsolvable!';
+      autoPlayState.message = result === 'solved' ? 'Solution found!' : result === 'unknown' ? `${autoPlayState.searchLimitMs / 60000}-minute limit reached; ${boardSavingEnabled ? 'board saved to archive' : 'moving to next board'}.` : 'Board is unsolvable!';
       if (result !== 'solved') {
         // Restore the original deal, undoing even manual moves made before
         // Auto Play, before halting on a proof or advancing after a timeout.
