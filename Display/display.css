@@ -1,19 +1,9 @@
-/* Display headings, outcome counts, and the animated board. */
-.display-page .topbar,
-.display-page .controls,
-.display-page #no-moves-notice,
-.display-page dialog,
-.display-page #analysis-graph-wrap,
-.display-page #analysis-palette { display: none !important; }
-.display-page { --board-render-width: min(88vw, 780px, calc((100dvh - 300px) * 1.14)); }
-.display-page .auto-play-session { border: 0; background: transparent; padding: 0; border-radius: 0; }
-.display-page #auto-play-status,
-.display-page .auto-play-stats > span:has(#auto-play-elapsed),
-.display-page .auto-play-stats > span:has(#auto-play-search-elapsed),
-.display-page .auto-play-stats > span:has(#auto-play-max-solve) { display: none; }
+/* Keep the original display headings; the only other content is the board. */
+.display-page .app { max-width: none; padding: 16px 12px 12px; }
 .display-title { margin: 0 0 12px; font-size: clamp(1.5rem, 4vw, 2rem); text-align: center; }
-.display-subtitle { margin: 0 0 18px; text-align: center; font-size: 1.25rem; line-height: 1.5; text-wrap: balance; }
+.display-subtitle { margin: 0 0 18px; text-align: center; font-size: 1.25rem; line-height: 1.5; }
 .display-subtitle > span { display: block; max-width: 100%; }
-.display-page .board-layout { pointer-events: none; }
-
-#display-search-time { margin: 8px 0 0; font-variant-numeric: tabular-nums; }
+.display-page #board { width: var(--display-board-width, 780px); max-width: 100%; height: auto; }
+.display-page .board-wrap { pointer-events: none; }
+.display-page .recorded-tile, .display-page .moving-tile { stroke: #1d2a31; stroke-width: 1.1; }
+#playback-error { text-align: center; }

@@ -773,3 +773,13 @@ five-minute cap (12.9–191.0 seconds). Real-browser hard board 14 passed in
 custom timeout/archive checks passed. Reload Splash to load the updated search.
 For these hard deals select a 15-minute limit; timings vary with hardware and
 browser. The default remains five minutes. No saved solution moves are used.
+
+
+October 29: Display uses 100 offline recordings and a standalone SVG player.
+`node tests/display-recordings.cjs` independently validates distinct balanced
+boards, every legal move and animation path, and complete clearance.
+`node tests/display-playback-browser.cjs` accelerates presentation timing to play
+all 100 boards and the first board again, checks that each finishes white,
+rejects worker creation, verifies no game/solver scripts load, checks the
+headings and absence of statistics, and checks 1920×1080 and 1280×720 layouts.
+Set `PLAYWRIGHT_PATH` to the installed Playwright module if needed.

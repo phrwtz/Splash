@@ -186,6 +186,22 @@ suite retains its five-minute ceiling.
 
 ## Display page
 
-Open `https://phrwtz.github.io/Splash/Display/` for an unattended animated Auto Play display. It starts automatically with a one-minute computation limit per board, hides instructions and controls, and shows “Solving Splash Boards” with only the Solved, Proved unsolvable, and Timed out counts. Proven-unsolvable boards advance to the next deal in this page. The main game remains at `/Splash/`.
+Open `https://phrwtz.github.io/Splash/Display/` for unattended playback of 100
+distinct, balanced boards and their recorded solutions. The page starts
+immediately, animates every move, pauses briefly on each cleared board, and
+loops back to the first board after the hundredth. The title and subtitle are
+unchanged; solver statistics and controls are removed.
 
-Display mode does not load or save board archives, retain failed boards, or download them. Timed-out and proved-unsolvable boards are counted and discarded before continuing to the next deal. The main game still supports saving boards.
+Display loads only its recorded collection and a lightweight SVG player. It
+never loads `search.js` or `app.js`, performs searches, starts workers, or saves
+archives. Tile fills update only when a move starts or finishes; animation
+updates just one SVG transform per frame. The main game at `/Splash/` continues
+to calculate solutions as before.
+
+`Display/recordings.js` contains the initial tiles plus every move's source,
+destination, animation path, source color, and resulting color. Regenerate the
+collection offline with `node scripts/generate-display.cjs`; then run
+`node tests/display-recordings.cjs` to independently verify all 4,000 moves,
+paths, and final cleared boards. Run `node tests/display-playback-browser.cjs`
+with `PLAYWRIGHT_PATH` set to your installed Playwright package to check all
+100 animations, the wrap to board 1, and the display layout.

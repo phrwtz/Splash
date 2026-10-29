@@ -4,176 +4,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Splash Display</title>
-    <base href="../" />
-    <link rel="stylesheet" href="Display/display.css?v=20261026-search-v2" />
-    <link rel="stylesheet" href="styles.css?v=20261020-beam-v1" />
+    <link rel="stylesheet" href="../styles.css?v=20261020-beam-v1" />
+    <link rel="stylesheet" href="display.css?v=20261029-recorded-v1" />
   </head>
   <body class="display-page">
     <main class="app">
-      <section id="landing-screen" class="screen landing-screen">
-        <header class="topbar landing-topbar">
-          <div class="title-block">
-            <h1 class="splash-word" aria-label="SPLASH" style='font-family: "Comic Sans MS", "Comic Sans", cursive;'>
-              <span class="splash-letter" style="color: #d94037;">S</span><span class="splash-letter" style="color: #2763d8;">P</span><span class="splash-letter" style="color: #f0c419;">L</span><span class="splash-letter" style="color: #b45be7;">A</span><span class="splash-letter" style="color: #f68b2d;">S</span><span class="splash-letter" style="color: #1fb85f;">H</span>
-            </h1>
-            <p class="subtitle">Drag colors to create new colors. All three primary colors clear the cell.<br />You get one point for every empty cell. Try to clear the whole board. It can be done!</p>
-          </div>
-          <div class="hero-actions landing-actions">
-            <button id="landing-demo-btn" type="button">Watch Demo</button>
-          </div>
-        </header>
-
-        <section class="board-wrap" aria-label="Colors board preview">
-          <svg id="landing-board" role="img" aria-label="Hex board preview"></svg>
-        </section>
+      <h1 class="display-title">Solving Splash Boards</h1>
+      <p class="display-subtitle"><span>Superimposing all three primary colors clears the tile.</span> <span>Tiles can migrate over their own color and into a neighboring one but cannot cross cleared spaces.</span> <span>Object: clear all the tiles.</span></p>
+      <section class="board-wrap" aria-label="Splash solution playback">
+        <svg id="board" role="img" aria-label="Animated Splash board"></svg>
       </section>
-
-      <section id="instructions-screen" class="screen instructions-screen hidden">
-        <div class="panel instructions-panel">
-          <h2>How Colors Works</h2>
-          <p>Move a tile from one blob onto a tile in a linked, mixable blob to score and transform the board.</p>
-          <ul>
-            <li>Primary colors are red, blue, and yellow.</li>
-            <li>Mixing two different neighboring primary tiles creates a mixed color.</li>
-            <li>White tiles add to the score and can never be landed on.</li>
-            <li>Legal moves start in one blob and land on a tile in an edge-linked, mixable blob.</li>
-          </ul>
-          <div class="hero-actions">
-            <button id="instructions-demo-btn" type="button">Watch Demo</button>
-            <button id="instructions-exit-btn" type="button">Exit</button>
-          </div>
-        </div>
-      </section>
-
-      <section id="game-screen" class="screen game-screen hidden">
-        <div class="game-shell">
-          <header class="topbar">
-            <div class="title-block">
-              <div class="title-row">
-                <h2 class="splash-word" aria-label="SPLASH" style='font-family: "Comic Sans MS", "Comic Sans", cursive;'>
-                  <span class="splash-letter" style="color: #d94037;">S</span><span class="splash-letter" style="color: #2763d8;">P</span><span class="splash-letter" style="color: #f0c419;">L</span><span class="splash-letter" style="color: #b45be7;">A</span><span class="splash-letter" style="color: #f68b2d;">S</span><span class="splash-letter" style="color: #1fb85f;">H</span>
-                </h2>
-                <p class="demo-word" aria-label="DEMO" style='font-family: "Comic Sans MS", "Comic Sans", cursive;'>
-                  <span class="splash-letter" style="color: #d94037;">D</span><span class="splash-letter" style="color: #2763d8;">E</span><span class="splash-letter" style="color: #f0c419;">M</span><span class="splash-letter" style="color: #b45be7;">O</span>
-                </p>
-                <p class="score-pill">Score: <span id="score-value">0</span></p>
-                <p class="score-pill">Best: <span id="best-score-value">0</span></p>
-                <p class="score-pill">Undos: <span id="undo-count-value">0</span></p>
-                <p class="score-pill">Timer: <span id="board-timer-value">0 minutes, 0 seconds</span></p>
-              </div>
-              <p id="game-subtitle" class="subtitle">Drag colors to create new colors. All three primary colors clear the cell.<br />You get one point for every empty cell. Try to clear the whole board. It can be done!</p>
-            </div>
-            <div class="topbar-actions">
-              <section
-                id="move-error-modal"
-                class="move-error hidden"
-                role="dialog"
-                aria-modal="false"
-                aria-live="polite"
-                aria-label="Move message"
-              >
-                <p id="move-error-text" class="move-error-text"></p>
-                <div class="move-error-actions">
-                  <button id="demo-back-btn" class="hidden" type="button">Back</button>
-                  <button id="demo-exit-btn" class="hidden" type="button">Exit</button>
-                  <button id="demo-show-btn" class="hidden" type="button">Show me</button>
-                  <button id="move-error-ok-btn" type="button">OK</button>
-                </div>
-              </section>
-            </div>
-          </header>
-
-          <section class="controls" aria-label="Game controls">
-            <button id="play-demo-btn" type="button">Watch Demo</button>
-            <button id="analysis-btn" class="hidden" type="button">Analysis</button>
-            <button id="undo-btn" type="button">Undo</button>
-            <button id="reset-btn" type="button">Reset</button>
-            <button id="new-board-btn" type="button">New Board</button>
-            <button id="save-board-btn" class="hidden" type="button">Save Board</button>
-            <button id="saved-timeouts-btn" class="hidden" type="button">Saved boards</button>
-            <button id="auto-play-btn" class="hidden" type="button">Auto Play</button>
-            <button id="clear-board-btn" class="hidden" type="button">Clear Board</button>
-            <p id="analysis-mix-feedback" class="analysis-mix-feedback hidden" role="status" aria-live="polite"></p>
-          </section>
-          <h1 class="display-title">Solving Splash Boards</h1>
-          <p class="display-subtitle"><span>Superimposing all three primary colors clears the tile.</span> <span>Tiles can migrate over their own color and into a neighboring one but cannot cross cleared spaces.</span> <span>Object: clear all the tiles.</span></p>
-          <section id="auto-play-session" class="auto-play-session hidden" aria-label="Auto Play session">
-            <p id="auto-play-status" role="status" aria-live="polite"></p>
-            <div class="auto-play-stats">
-              <span>Session: <span id="auto-play-elapsed">0 minutes, 0 seconds</span></span>
-              <span>Current search: <span id="auto-play-search-elapsed">0.00 seconds</span></span>
-              <span>Solved: <span id="auto-play-solved">0</span></span>
-              <span title="Longest search computation time for a solved board in this Auto Play session; excludes animation and pauses.">Maximum solve time: <span id="auto-play-max-solve">—</span></span>
-              <span>Proved unsolvable: <span id="auto-play-unsolvable">0</span></span>
-              <span>Timed out: <span id="auto-play-unknown">0</span></span>
-            </div>
-            <p id="display-search-time" class="hidden"></p>
-          </section>
-          <p id="no-moves-notice" class="no-moves-notice hidden" role="status" aria-live="polite">
-            There are no legal moves left!
-          </p>
-
-          <div class="board-layout">
-            <aside id="analysis-palette" class="analysis-palette hidden" aria-label="Analysis palette">
-              <button class="analysis-swatch red" data-color="red" type="button" aria-label="Place red tile">
-                <span class="analysis-swatch-count">0</span>
-              </button>
-              <button class="analysis-swatch blue" data-color="blue" type="button" aria-label="Place blue tile">
-                <span class="analysis-swatch-count">0</span>
-              </button>
-              <button class="analysis-swatch yellow" data-color="yellow" type="button" aria-label="Place yellow tile">
-                <span class="analysis-swatch-count">0</span>
-              </button>
-              <button class="analysis-swatch white" data-color="white" type="button" aria-label="Erase tile">
-                <span class="analysis-swatch-count">0</span>
-              </button>
-            </aside>
-
-            <section class="board-wrap" aria-label="Colors board">
-              <p id="analysis-board-status" class="analysis-board-status hidden" aria-live="polite">
-                <span id="analysis-connectivity-status">Disconnected</span>
-                <span id="analysis-balance-status">Balanced</span>
-              </p>
-              <svg id="board" role="img" aria-label="Hex board"></svg>
-            </section>
-
-            <section id="analysis-graph-wrap" class="analysis-graph-wrap hidden" aria-label="Blob graph">
-              <p id="analysis-cluster-count" class="analysis-cluster-count" aria-live="polite">Compact clusters: 0 · Linear clusters: 0</p>
-              <svg id="analysis-graph" role="img" aria-label="Blob graph"></svg>
-            </section>
-          </div>
-        </div>
-      </section>
+      <p id="playback-error" role="alert" hidden></p>
     </main>
-
-    <dialog id="auto-play-options" aria-labelledby="auto-play-options-title">
-      <h2 id="auto-play-options-title">Auto Play</h2>
-      <p>Each board gets the selected limit of search computation (animation pauses excluded). Timed-out boards are counted, saved, and skipped; a timeout does not prove a board unsolvable.</p>
-      <p><label for="auto-play-timeout">Timeout per board (minutes)</label> <input id="auto-play-timeout" type="number" min="0.01" step="any" value="5" required aria-describedby="auto-play-timeout-help"></p>
-      <p id="auto-play-timeout-help">Default: 5 minutes. Enter a positive number; fractional minutes are allowed.</p>
-      <fieldset>
-        <legend>Display mode</legend>
-        <p><label><input id="auto-play-animation" type="radio" name="auto-play-display" value="animate" checked> Animate moves</label></p>
-        <p><label><input id="auto-play-no-display" type="radio" name="auto-play-display" value="none"> No display</label></p>
-      </fieldset>
-      <p>No display shows the original board being solved. The board display updates only when a new board starts.</p>
-      <div class="saved-timeout-actions"><button id="auto-play-start" type="button">Start Auto Play</button></div>
-      <form method="dialog"><button type="submit">Cancel</button></form>
-    </dialog>
-    <dialog id="saved-timeouts-dialog" aria-labelledby="saved-timeouts-title">
-      <h2 id="saved-timeouts-title">Saved boards</h2>
-      <p>Manually saved boards, proven-unsolvable boards, and previously timed-out boards are saved here. Use Save Board to save the currently displayed position. Select a board, then choose Play this board to try solving it yourself. Playing one stops Auto Play. Clear this board removes it from this list.</p>
-      <p id="saved-timeouts-storage" role="status"></p>
-      <p><button type="button" data-archive-action="open">Open board archive</button> <button type="button" data-archive-action="create">Save boards to new archive</button></p>
-      <div id="saved-timeouts-list"></div>
-      <div class="saved-timeout-actions">
-        <button id="saved-timeout-play" type="button" disabled>Play this board</button>
-        <button id="saved-timeout-clear" type="button" disabled>Clear selected boards</button>
-      </div>
-      <form method="dialog"><button type="submit">Close</button></form>
-    </dialog>
-    <script src="search.js?v=20261024-resource-beam-v2"></script>
-    <script src="app.js?v=20261027-display-no-archive-v1"></script>
-    <script src="Display/display.js?v=20261026-search-v2"></script>
+    <script src="recordings.js?v=20261029-recorded-v1"></script>
+    <script src="display.js?v=20261029-recorded-v1"></script>
   </body>
 </html>
